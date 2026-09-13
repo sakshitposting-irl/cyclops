@@ -1,8 +1,7 @@
 name: Tests
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:  # temporarily manual-only until the repo has real implementation to test
 
 permissions: {}
 
