@@ -19,15 +19,25 @@ works is described in [`../internals/`](../README.md#internals).
 | 7 | Notification channels: typed `notifiers` list in the CRD now; only `Email` implemented in v1, `Webhook` deferred to v2 | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
 | 9 | Report inclusion: by expiry only; failure diagnostics shown but never cause inclusion | [0009-report-inclusion.md](0009-report-inclusion.md) |
+| 10 | Watch scope: `spec.namespaces` list (empty = all); missing namespaces reported; read-only ClusterRole | [0010-watch-scope.md](0010-watch-scope.md) |
 
 ## Open / not yet decided
+
+- Diagnostics for non-ACME failures: ADR 0004 takes `State`/`Reason` only
+  from ACME Orders/Challenges, so a certificate from a CA, Vault or
+  self-signed issuer that fails to issue is reported with no reason at all.
+  Found by the cluster tests. Checked on the cluster: the Certificate's own
+  `Ready` condition doesn't help (`DoesNotExist` refers to its TLS Secret,
+  normal before first issuance); the newest CertificateRequest's `Ready`
+  condition points at the issuer; the Issuer's `Ready` condition has the
+  root cause (e.g. `ErrGetKeyPair`: CA Secret not found). Options: relay the
+  request's condition, or the request's plus the Issuer's (needs read RBAC on
+  Issuers/ClusterIssuers, revising ADR 0010).
 
 - Credential handling specifics for SES vs SMTP (IAM vs access keys vs
   SMTP host/user/pass/TLS, Secret shapes).
 - State & dedup: how to avoid re-alerting on the same cert every single day
   once it crosses the threshold, and where that state lives.
-- RBAC / watch scope details (namespace filtering mechanics, ClusterRole
-  shape).
 - HA / leader election posture for the controller (the reconciler managing
   the CronJob is lightweight, but still worth deciding explicitly).
 - Observability: metrics/logging expectations.

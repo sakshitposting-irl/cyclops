@@ -4,18 +4,49 @@ What report mode does with cert-manager's data: turn it into cyclops's own view 
 certificate, decide which ones need attention, and put them in a stable order for the email.
 
 ```
-list objects ──▶ convert ──────────────────▶ evaluate ─────────▶ render ──▶ send
-(not built)      internal/certmanager         internal/report      (not built yet)
-                 ToCertStatus                 Evaluate
+list ─────────────────▶ convert ─────────────────▶ evaluate ──────▶ render ──▶ send
+internal/certmanager     internal/certmanager        internal/report    (not built yet)
+List → Snapshot          Snapshot.CertStatuses       Evaluate
+                         (ToCertStatus per cert)
 ```
 
 | Package | Knows about | Tested with |
 |---|---|---|
-| `internal/certmanager` | cert-manager's API types; the only package that imports them | hand-built objects, no cluster |
+| `internal/certmanager` | cert-manager's API types; the only package that imports them | hand-built objects and controller-runtime's fake client, no cluster |
 | `internal/report` | plain Go: `CertStatus`, `Finding`, `time.Time` | table tests, fixed `now` |
+| `test/cluster` | the whole pipeline up to `Evaluate` | a real kind cluster with cert-manager (`make test-cluster`) |
 
 Keeping cert-manager at the edge means the decision logic can be tested without a cluster, and a
 cert-manager API change only touches one package.
+
+---
+
+## `List`: reading from the cluster
+
+`internal/certmanager/list.go`: `List(ctx, c, namespaces) (Snapshot, error)`
+
+`Snapshot` holds everything read in one run: the Certificates, CertificateRequests, Orders and
+Challenges as four separate lists, plus `MissingNamespaces`. The lists are linked to each other
+only by owner references; `Snapshot.CertStatuses()` joins them into one `CertStatus` per
+Certificate (see [`ToCertStatus`](#tocertstatus-converting-cert-manager-objects)).
+
+Which namespaces are read follows ADR 0010:
+
+- **Empty `namespaces` → all namespaces.** It becomes the one-item list `[""]`, because
+  `client.InNamespace("")` means "all namespaces". Each kind is then fetched with one
+  cluster-wide `List`.
+- **Explicit namespaces → one `List` per kind per namespace.** Duplicates are removed first, so a
+  namespace listed twice doesn't put its certificates in the report twice.
+- **Missing namespaces are reported.** Listing inside a namespace that doesn't exist returns an
+  empty list with no error, so a typo would look like "no certificates". Instead, each explicit
+  namespace is checked with a `Get` on the `Namespace` object, which does return NotFound. Missing
+  ones go into `MissingNamespaces` and are skipped.
+- **`MissingNamespaces` is sorted**, so the report doesn't change when `spec.namespaces` is
+  reordered. Certificates aren't sorted here; `Evaluate` sorts the findings.
+
+`List` fetches everything in one go, with no pagination. That's fine for normal clusters (tens to
+thousands of certificates). At very large scale, listing is the expensive step, and
+`client.Limit`/`Continue` pagination is where to start.
 
 ---
 
@@ -116,9 +147,9 @@ func ToCertStatus(
 ) report.CertStatus
 ```
 
-A pure function: it makes no API calls. The caller (the listing step) passes in every
-CertificateRequest, Order and Challenge it fetched, for all certificates; `ToCertStatus` picks out
-the ones belonging to `cert`.
+A pure function: it makes no API calls. `Snapshot.CertStatuses()` calls it once per Certificate,
+passing every CertificateRequest, Order and Challenge `List` fetched, for all certificates;
+`ToCertStatus` picks out the ones belonging to `cert`.
 
 ### The plain fields
 
@@ -216,11 +247,28 @@ To look these up yourself: `go doc github.com/cert-manager/cert-manager/pkg/apis
 
 ---
 
+## Known gap: no reason for non-ACME failures
+
+`State` and `Reason` only come from ACME Orders and Challenges (ADR 0004). A certificate from any
+other issuer (CA, Vault, self-signed) that fails to issue reaches the report with both empty.
+
+Found by the cluster tests: `cyclops-test-b/broken` is reported as `NeverIssued` with no reason.
+cert-manager does record why, just not on the Certificate:
+
+```
+Certificate broken   Ready=False  DoesNotExist   "Issuing certificate as Secret does not exist"
+CertificateRequest   Ready=False  Pending        "Referenced issuer does not have a Ready status condition"
+Issuer broken-ca     Ready=False  ErrGetKeyPair  "Error getting keypair for CA issuer: secrets "does-not-exist" not found"
+```
+
+The Certificate's `DoesNotExist` is about its own TLS Secret, which every certificate lacks before
+its first issuance, so it says nothing useful. The root cause is on the Issuer. Which of these to
+relay is an open decision (see [`../decisions/README.md`](../decisions/README.md)).
+
+---
+
 ## Not built yet
 
-- **Listing.** Report mode will `List` Certificates, CertificateRequests, Orders and Challenges and
-  pass them to `ToCertStatus`. Its shape depends on the open RBAC / watch-scope decision. At very
-  large scale this is the expensive step (use `Limit`/`Continue` pagination), not evaluation or
-  sorting.
 - **Rendering** with `html/template` (ADR 0005) and **sending** via the notifiers (ADR 0007/0008).
+- **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

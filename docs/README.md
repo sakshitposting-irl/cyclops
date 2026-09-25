@@ -11,7 +11,7 @@
 |---|---|
 | [manager-startup.md](internals/manager-startup.md) | `cmd/main.go`: the Scheme, `main`/`run`, flags, the controller-runtime Manager, startup timeline |
 | [leader-election.md](internals/leader-election.md) | the Lease mechanism, timers, failover, and the open HA decision |
-| [report-pipeline.md](internals/report-pipeline.md) | `CertStatus`, `Evaluate`, `ToCertStatus`: which certificates are reported and where the diagnostics come from |
+| [report-pipeline.md](internals/report-pipeline.md) | `List`, `CertStatus`, `ToCertStatus`, `Evaluate`: how certificates are read from the cluster, which are reported, and where the diagnostics come from |
 
 Internals docs describe the code as it is. When the code changes, update the matching doc in the
 same commit. Decisions go in `decisions/`, not here.

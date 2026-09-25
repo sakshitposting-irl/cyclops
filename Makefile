@@ -90,6 +90,12 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
+CLUSTER_CONTEXT ?= kind-cyclops
+
+.PHONY: test-cluster
+test-cluster: ## Run cluster validation tests against an existing kind cluster with cert-manager installed.
+	CLUSTER_CONTEXT=$(CLUSTER_CONTEXT) go test -tags=cluster ./test/cluster/ -v -count=1
+
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)

@@ -1,0 +1,80 @@
+# Fixtures for the cluster validation tests (test/cluster). Applied at the
+# start of a run and deleted at the end. Uses only local issuers, so nothing
+# here calls Let's Encrypt or any other external service.
+#
+#   cyclops-test-a/healthy   self-signed, 90 days  → not reported
+#   cyclops-test-a/expiring  self-signed, 20 days  → ExpiringSoon
+#   cyclops-test-b/broken    CA issuer, no CA key  → NeverIssued
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cyclops-test-a
+  labels: {cyclops-test: "true"}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cyclops-test-b
+  labels: {cyclops-test: "true"}
+---
+# cert-manager signs certificates with their own key, inside the cluster.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cyclops-test-selfsigned
+  labels: {cyclops-test: "true"}
+spec:
+  selfSigned: {}
+---
+# Expiry = issue time + duration: 90 days is outside the 30-day threshold.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: healthy
+  namespace: cyclops-test-a
+  labels: {cyclops-test: "true"}
+spec:
+  secretName: healthy-tls
+  commonName: healthy.test
+  dnsNames: [healthy.test]
+  duration: 2160h
+  issuerRef: {kind: ClusterIssuer, name: cyclops-test-selfsigned}
+---
+# 20 days: inside the 30-day threshold.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: expiring
+  namespace: cyclops-test-a
+  labels: {cyclops-test: "true"}
+spec:
+  secretName: expiring-tls
+  commonName: expiring.test
+  dnsNames: [expiring.test]
+  duration: 480h
+  issuerRef: {kind: ClusterIssuer, name: cyclops-test-selfsigned}
+---
+# A CA issuer signs with the key in secretName. That Secret doesn't exist,
+# so the issuer never becomes ready.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: broken-ca
+  namespace: cyclops-test-b
+  labels: {cyclops-test: "true"}
+spec:
+  ca:
+    secretName: does-not-exist
+---
+# Can never be issued, so it never gets a notAfter.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: broken
+  namespace: cyclops-test-b
+  labels: {cyclops-test: "true"}
+spec:
+  secretName: broken-tls
+  commonName: broken.test
+  dnsNames: [broken.test]
+  issuerRef: {kind: Issuer, name: broken-ca}

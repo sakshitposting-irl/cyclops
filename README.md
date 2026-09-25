@@ -39,7 +39,7 @@ happening.
 | Architecture decisions | ✅ recorded in [`docs/decisions/`](docs/decisions/README.md) |
 | Deciding which certificates to report (`internal/report`) | ✅ done, tested |
 | Converting cert-manager objects (`internal/certmanager`) | ✅ done, tested |
-| Listing certificates from the cluster | ⏳ not started |
+| Listing certificates from the cluster (`internal/certmanager`) | ✅ done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation | ⏳ not started |
 | Email rendering and sending (SES, SMTP) | ⏳ not started |
 | `CertReport` schema | ⏳ placeholder |
@@ -63,6 +63,15 @@ make test         # unit tests (envtest)
 make lint         # golangci-lint
 make run          # run the controller against your current kubeconfig context
 make help         # list all targets
+```
+
+Cluster validation tests run the report pipeline against a real cluster using the fixtures in
+`test/cluster/testdata/`. They need a kind cluster with cert-manager installed, create and delete
+their own `cyclops-test-*` namespaces, and refuse to run on any context not named `kind-*`:
+
+```sh
+make test-cluster                              # uses the kind-cyclops context
+make test-cluster CLUSTER_CONTEXT=kind-other   # or pick another kind cluster
 ```
 
 After editing `api/v1alpha1/*_types.go` or `+kubebuilder` markers, regenerate CRDs, RBAC and
