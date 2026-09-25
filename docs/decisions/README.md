@@ -2,9 +2,9 @@
 
 This folder tracks the architectural decisions made for cyclops, in the order
 they were made. Each file is a lightweight ADR: context, options considered
-(with pros/cons), and the decision. No code exists yet — these are design
-decisions only, made deliberately and one at a time before any implementation
-begins.
+(with pros/cons), and the decision. Decisions are made deliberately, one at a
+time, before the code that depends on them is written. How the resulting code
+works is described in [`../internals/`](../README.md#internals).
 
 ## Decided
 
@@ -18,6 +18,7 @@ begins.
 | 6 | Scheduling model: controller reconciles CR and owns a child `CronJob` | [0006-scheduling-model.md](0006-scheduling-model.md) |
 | 7 | Notification channels: typed `notifiers` list in the CRD now; only `Email` implemented in v1, `Webhook` deferred to v2 | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
+| 9 | Report inclusion: by expiry only; failure diagnostics shown but never cause inclusion | [0009-report-inclusion.md](0009-report-inclusion.md) |
 
 ## Open / not yet decided
 
