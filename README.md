@@ -1,135 +1,98 @@
 # cyclops
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes controller that watches [cert-manager](https://cert-manager.io) `Certificate`
+resources and emails a daily report of certificates that are expired, never issued, or expiring
+soon (default: within 30 days).
 
-## Getting Started
+cert-manager renews certificates automatically. cyclops is the backstop for when that renewal
+silently fails.
 
-### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+> [!NOTE]
+> **Status: in development.** The design is decided and the core reporting logic is written and
+> tested, but cyclops doesn't send reports yet. See [Status](#status).
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+## How it works
 
-```sh
-make docker-build docker-push IMG=<some-registry>/cyclops:tag
+```mermaid
+flowchart LR
+    CR["CertReport<br/>(schedule, threshold, notifiers)"] -->|reconciles| CTRL[cyclops controller]
+    CTRL -->|owns| CJ[CronJob]
+    CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
+    JOB -->|lists| CM["cert-manager<br/>Certificates"]
+    JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+1. You create a cluster-scoped `CertReport` describing the schedule, the expiry threshold and who
+   to notify.
+2. The controller keeps a Kubernetes `CronJob` in sync with it.
+3. On schedule, the CronJob runs cyclops in **report mode**: it lists every cert-manager
+   `Certificate`, picks out the ones that need attention, and emails the report.
 
-**Install the CRDs into the cluster:**
+For certificates that are due, the report also shows cert-manager's own diagnostics (failed
+attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
+happening.
+
+## Status
+
+| Piece | State |
+|---|---|
+| Architecture decisions | ✅ recorded in [`docs/decisions/`](docs/decisions/README.md) |
+| Deciding which certificates to report (`internal/report`) | ✅ done, tested |
+| Converting cert-manager objects (`internal/certmanager`) | ✅ done, tested |
+| Listing certificates from the cluster | ⏳ not started |
+| `CertReport` → `CronJob` reconciliation | ⏳ not started |
+| Email rendering and sending (SES, SMTP) | ⏳ not started |
+| `CertReport` schema | ⏳ placeholder |
+
+## Documentation
+
+- [**Design decisions**](docs/decisions/README.md): what's been decided, with pros and cons, and
+  what's still open.
+- [**Internals**](docs/README.md#internals): how the code works (startup, leader election, the
+  report pipeline).
+
+## Development
+
+**Prerequisites:** Go 1.26+, Docker, `kubectl`, and a Kubernetes cluster with cert-manager
+installed (for example [kind](https://kind.sigs.k8s.io)). Tool binaries such as `controller-gen`
+and `golangci-lint` are downloaded into `bin/` automatically.
 
 ```sh
-make install
+make build        # build bin/manager
+make test         # unit tests (envtest)
+make lint         # golangci-lint
+make run          # run the controller against your current kubeconfig context
+make help         # list all targets
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+After editing `api/v1alpha1/*_types.go` or `+kubebuilder` markers, regenerate CRDs, RBAC and
+DeepCopy code:
 
 ```sh
-make deploy IMG=<some-registry>/cyclops:tag
+make manifests generate
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+## Deploying to a cluster
 
 ```sh
-kubectl apply -k config/samples/
+export IMG=<registry>/cyclops:<tag>
+
+make docker-build docker-push IMG=$IMG   # build and push the image
+make install                             # install the CRDs
+make deploy IMG=$IMG                     # deploy the controller
+kubectl apply -k config/samples/         # create a sample CertReport
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+If you hit RBAC errors, you may need cluster-admin privileges.
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+To remove everything:
 
 ```sh
 kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
+make undeploy
 make uninstall
 ```
 
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/cyclops:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/cyclops/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
