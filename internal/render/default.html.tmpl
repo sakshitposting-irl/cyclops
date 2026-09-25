@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #1f2328; margin: 0; padding: 24px;">
+  <h2 style="margin: 0 0 4px;">Daily Certificate Report: {{ .ReportName }}</h2>
+{{- if not .GeneratedAt.IsZero }}
+  <p style="margin: 0 0 20px; color: #59636e; font-size: 13px;">Generated {{ .GeneratedAt.Format "2006-01-02 15:04 UTC" }}</p>
+{{- end }}
+
+{{- if not .Findings }}
+  <p>No certificates need attention. Every certificate is issued, unexpired, and not overdue for renewal.</p>
+{{- else }}
+  <p>{{ len .Findings }} certificate{{ if ne (len .Findings) 1 }}s{{ end }} need{{ if eq (len .Findings) 1 }}s{{ end }} attention, most urgent first.</p>
+  <table style="border-collapse: collapse; font-size: 14px;">
+    <tr style="text-align: left; border-bottom: 2px solid #d1d9e0;">
+      <th style="padding: 6px 12px 6px 0;">Status</th>
+      <th style="padding: 6px 12px 6px 0;">Certificate</th>
+      <th style="padding: 6px 12px 6px 0;">Expires</th>
+      <th style="padding: 6px 12px 6px 0;">Renewal due</th>
+      <th style="padding: 6px 12px 6px 0;">Failed attempts</th>
+      <th style="padding: 6px 0;">cert-manager says</th>
+    </tr>
+  {{- range .Findings }}
+    <tr style="border-bottom: 1px solid #d1d9e0; vertical-align: top;">
+      <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
+        {{- if eq .Kind "NeverIssued" }}Never issued
+        {{- else if eq .Kind "Expired" }}Expired
+        {{- else if eq .Kind "RenewalOverdue" }}Renewal overdue
+        {{- else }}{{ .Kind }}{{ end -}}
+      </td>
+      <td style="padding: 6px 12px 6px 0;">{{ .Namespace }}/{{ .Name }}</td>
+      <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
+        {{- if .NotAfter.IsZero }}never issued
+        {{- else }}{{ .NotAfter.Format "2006-01-02" }}
+          {{- if lt .DaysLeft 0 }} (expired)
+          {{- else if eq .DaysLeft 0 }} (today)
+          {{- else }} ({{ .DaysLeft }} day{{ if ne .DaysLeft 1 }}s{{ end }} left){{ end }}
+        {{- end -}}
+      </td>
+      <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
+        {{- if .RenewalTime.IsZero }}—{{ else }}{{ .RenewalTime.Format "2006-01-02 15:04" }}{{ end -}}
+      </td>
+      <td style="padding: 6px 12px 6px 0;">{{ .FailedIssuanceAttempts }}</td>
+      <td style="padding: 6px 0;">
+        {{- if or .State .Reason }}{{ with .State }}<strong>{{ . }}</strong>{{ end }}{{ if and .State .Reason }}: {{ end }}{{ .Reason }}
+        {{- else }}—{{ end -}}
+      </td>
+    </tr>
+  {{- end }}
+  </table>
+{{- end }}
+
+  <p style="margin-top: 24px; color: #59636e; font-size: 12px;">Sent by <a href="https://github.com/sakshitposting-irl/cyclops" style="font-weight: bold; color: #800425;">Cyclops</a>. Certificates are listed when cert-manager has never issued them, they have expired, or their renewal is more than an hour overdue.</p>
+</body>
+</html>

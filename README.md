@@ -41,7 +41,8 @@ happening.
 | Converting cert-manager objects (`internal/certmanager`) | ✅ done, tested |
 | Listing certificates from the cluster (`internal/certmanager`) | ✅ done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation | ⏳ not started |
-| Email rendering and sending (SES, SMTP) | ⏳ not started |
+| Email rendering (`internal/render`) | ✅ done, tested |
+| Email sending (SES, SMTP) | ⏳ not started |
 | `CertReport` schema | ⏳ placeholder |
 
 ## Documentation

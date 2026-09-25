@@ -22,6 +22,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 10 | Watch scope: `spec.namespaces` list (empty = all); read-only ClusterRole (missing-namespace handling superseded by 11) | [0010-watch-scope.md](0010-watch-scope.md) |
 | 11 | Namespace validation: controller sets a `NamespacesFound` condition and watches Namespaces; not in the email | [0011-namespace-validation.md](0011-namespace-validation.md) |
 | 12 | Inclusion rule: never issued, expired, or past own `renewalTime` by >1h; no threshold | [0012-renewal-overdue.md](0012-renewal-overdue.md) |
+| 13 | Template data: flat `TemplateData`/`Row` contract for all templates; additive changes only | [0013-template-data.md](0013-template-data.md) |
 
 ## Open / not yet decided
 
@@ -39,7 +40,8 @@ works is described in [`../internals/`](../README.md#internals).
 - Credential handling specifics for SES vs SMTP (IAM vs access keys vs
   SMTP host/user/pass/TLS, Secret shapes).
 - State & dedup: how to avoid re-alerting on the same cert every single day
-  once it crosses the threshold, and where that state lives.
+  once it's reported, and where that state lives. Also decides whether an
+  email is sent when there's nothing to report.
 - HA / leader election posture for the controller (the reconciler managing
   the CronJob is lightweight, but still worth deciding explicitly).
 - Observability: metrics/logging expectations.

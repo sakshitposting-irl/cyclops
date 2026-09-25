@@ -1,19 +1,20 @@
 # Report pipeline
 
 What report mode does with cert-manager's data: turn it into cyclops's own view of each
-certificate, decide which ones need attention, and put them in a stable order for the email.
+certificate, decide which ones need attention, put them in a stable order, and render the email.
 
 ```
-list ─────────────────▶ convert ─────────────────▶ evaluate ──────▶ render ──▶ send
-internal/certmanager     internal/certmanager        internal/report    (not built yet)
-List → Snapshot          Snapshot.CertStatuses       Evaluate
-                         (ToCertStatus per cert)
+list ──────────────▶ convert ──────────────▶ evaluate ─────────▶ render ──────────────────▶ send
+internal/certmanager  internal/certmanager     internal/report     internal/render              (not built yet)
+List → Snapshot       Snapshot.CertStatuses    Evaluate            NewTemplateData → Render,
+                      (ToCertStatus per cert)                      Subject
 ```
 
 | Package | Knows about | Tested with |
 |---|---|---|
 | `internal/certmanager` | cert-manager's API types; the only package that imports them | hand-built objects and controller-runtime's fake client, no cluster |
 | `internal/report` | plain Go: `CertStatus`, `Finding`, `time.Time` | table tests, fixed `now` |
+| `internal/render` | `report.Finding` and `html/template`; the template data contract | table tests, rendered-output checks |
 | `test/cluster` | the whole pipeline up to `Evaluate` | a real kind cluster with cert-manager (`make test-cluster`) |
 
 Keeping cert-manager at the edge means the decision logic can be tested without a cluster, and a
@@ -282,8 +283,60 @@ relay is an open decision (see [`../decisions/README.md`](../decisions/README.md
 
 ---
 
+## `render`: turning findings into the email
+
+`internal/render`
+
+```go
+data := render.NewTemplateData(reportName, now, findings) // findings from Evaluate
+body, err := render.Render(render.Default, data)          // HTML body
+subject := render.Subject(data)                           // "[cyclops] 2 certificates need attention"
+```
+
+### The template data (ADR 0013)
+
+Every template, the built-in one and custom ones, receives a `TemplateData`: `ReportName`,
+`GeneratedAt`, and `Findings` as a flat list of `Row`s (`Kind`, `Namespace`, `Name`, `NotAfter`,
+`DaysLeft`, `RenewalTime`, `FailedIssuanceAttempts`, `State`, `Reason`). It is a separate type
+from `report.Finding` on purpose: users' templates depend on these field names, so internal types
+can change behind it without breaking anyone. Fields may be added; renaming or removing one needs
+a new ADR.
+
+`NewTemplateData` builds it:
+- **Times are converted to UTC**, so the email doesn't depend on the Job's timezone.
+- **`DaysLeft` rounds down** with `math.Floor`: 0.9 days → `0`, half a day past expiry → `-1`.
+  A plain `int()` conversion would round towards zero and give `0` for the second. It's `0` when
+  the certificate was never issued, rather than the distance back to year 1.
+
+### Rendering
+
+- **`Default`** is the built-in template, `default.html.tmpl`, compiled into the binary with
+  `//go:embed` and parsed once at startup. Users change the email with their own template via a
+  ConfigMap (ADR 0005), not by editing this file.
+- **`Parse`** parses template text, e.g. a custom template.
+- **`Render`** executes a template into a `bytes.Buffer` and returns the text only if the whole
+  template succeeded. A template that fails halfway (say, `{{ .NoSuchField }}`) returns an error
+  and no body, so a broken template never sends half an email. A nil or never-parsed template also
+  returns an error, instead of panicking.
+- **`Subject`** is set in code, not by the template: "All certificates healthy", "1 certificate
+  needs attention", or "n certificates need attention".
+
+### The default template
+
+- **Escaping.** `html/template` escapes every value by context, so `Reason` text (which comes from
+  ACME servers and CAs, i.e. untrusted) can't inject markup: `<b>` becomes `&lt;b&gt;`.
+- **Inline styles.** Email clients strip `<style>` blocks and don't support CSS variables, so
+  every element carries its own `style="..."`.
+- **`<meta charset="utf-8">`.** Without it, clients guess Windows-1252 and `—` shows as `â€”`.
+  When sending is built, the email also needs a `Content-Type: text/html; charset=UTF-8` header.
+- **Empty report.** No findings renders an "all clear" body. Whether to send it at all is part of
+  the open dedup decision.
+
+---
+
 ## Not built yet
 
-- **Rendering** with `html/template` (ADR 0005) and **sending** via the notifiers (ADR 0007/0008).
+- **Sending** via the notifiers: SES and SMTP (ADR 0007/0008).
+- **Custom templates** from a ConfigMap (ADR 0005), which needs the `CertReport` schema.
 - **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

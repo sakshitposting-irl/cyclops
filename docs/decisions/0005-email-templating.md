@@ -1,7 +1,8 @@
 # 5. Email templating
 
 ## Status
-Decided
+Decided. The template fields in the example below are illustrative only; the
+actual data contract is [ADR 0013](0013-template-data.md).
 
 ## Context
 Reports need a default rendering, with the ability for a user to supply
