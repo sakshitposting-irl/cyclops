@@ -2,9 +2,12 @@
 # start of a run and deleted at the end. Uses only local issuers, so nothing
 # here calls Let's Encrypt or any other external service.
 #
-#   cyclops-test-a/healthy   self-signed, 90 days  → not reported
-#   cyclops-test-a/expiring  self-signed, 20 days  → ExpiringSoon
+#   cyclops-test-a/healthy   self-signed, 90 days  → renewal due ~day 60
+#   cyclops-test-a/expiring  self-signed, 20 days  → renewal due ~day 13
 #   cyclops-test-b/broken    CA issuer, no CA key  → NeverIssued
+#
+# cert-manager renews at 2/3 of a certificate's lifetime by default. The
+# tests evaluate "15 days from now" to see expiring become RenewalOverdue.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -26,7 +29,7 @@ metadata:
 spec:
   selfSigned: {}
 ---
-# Expiry = issue time + duration: 90 days is outside the 30-day threshold.
+# Expiry = issue time + duration. Renewal due at ~day 60.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -40,7 +43,7 @@ spec:
   duration: 2160h
   issuerRef: {kind: ClusterIssuer, name: cyclops-test-selfsigned}
 ---
-# 20 days: inside the 30-day threshold.
+# 20 days. Renewal due at ~day 13, so overdue when evaluated at day 15.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

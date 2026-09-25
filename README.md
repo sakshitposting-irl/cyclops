@@ -1,8 +1,8 @@
 # cyclops
 
 A Kubernetes controller that watches [cert-manager](https://cert-manager.io) `Certificate`
-resources and emails a daily report of certificates that are expired, never issued, or expiring
-soon (default: within 30 days).
+resources and emails a daily report of certificates that are expired, were never issued, or are
+overdue for renewal (past the renewal time cert-manager set for them).
 
 cert-manager renews certificates automatically. cyclops is the backstop for when that renewal
 silently fails.
@@ -15,14 +15,14 @@ silently fails.
 
 ```mermaid
 flowchart LR
-    CR["CertReport<br/>(schedule, threshold, notifiers)"] -->|reconciles| CTRL[cyclops controller]
+    CR["CertReport<br/>(schedule, namespaces, notifiers)"] -->|reconciles| CTRL[cyclops controller]
     CTRL -->|owns| CJ[CronJob]
     CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
     JOB -->|lists| CM["cert-manager<br/>Certificates"]
     JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
 ```
 
-1. You create a cluster-scoped `CertReport` describing the schedule, the expiry threshold and who
+1. You create a cluster-scoped `CertReport` describing the schedule, which namespaces to cover and who
    to notify.
 2. The controller keeps a Kubernetes `CronJob` in sync with it.
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists every cert-manager

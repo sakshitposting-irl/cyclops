@@ -26,7 +26,7 @@ cert-manager API change only touches one package.
 `internal/certmanager/list.go`: `List(ctx, c, namespaces) (Snapshot, error)`
 
 `Snapshot` holds everything read in one run: the Certificates, CertificateRequests, Orders and
-Challenges as four separate lists, plus `MissingNamespaces`. The lists are linked to each other
+Challenges as four separate lists. The lists are linked to each other
 only by owner references; `Snapshot.CertStatuses()` joins them into one `CertStatus` per
 Certificate (see [`ToCertStatus`](#tocertstatus-converting-cert-manager-objects)).
 
@@ -37,12 +37,11 @@ Which namespaces are read follows ADR 0010:
   cluster-wide `List`.
 - **Explicit namespaces → one `List` per kind per namespace.** Duplicates are removed first, so a
   namespace listed twice doesn't put its certificates in the report twice.
-- **Missing namespaces are reported.** Listing inside a namespace that doesn't exist returns an
-  empty list with no error, so a typo would look like "no certificates". Instead, each explicit
-  namespace is checked with a `Get` on the `Namespace` object, which does return NotFound. Missing
-  ones go into `MissingNamespaces` and are skipped.
-- **`MissingNamespaces` is sorted**, so the report doesn't change when `spec.namespaces` is
-  reordered. Certificates aren't sorted here; `Evaluate` sorts the findings.
+- **A namespace that doesn't exist contributes nothing.** Listing inside it returns an empty list
+  with no error. Catching typos and deleted namespaces is the controller's job: it sets a
+  `NamespacesFound` condition on the `CertReport` (ADR 0011).
+
+Certificates aren't sorted here; `Evaluate` sorts the findings.
 
 `List` fetches everything in one go, with no pagination. That's fine for normal clusters (tens to
 thousands of certificates). At very large scale, listing is the expensive step, and
@@ -74,21 +73,26 @@ for code to match on.
 
 ## `Evaluate`: which certificates go in the report
 
-`internal/report/evaluate.go`: `Evaluate(certs, now, threshold) []Finding`
+`internal/report/evaluate.go`: `Evaluate(certs, now) []Finding`
 
-Three questions per certificate, in order; the first "yes" decides:
+Three questions per certificate, in order; the first "yes" decides (ADR 0012):
 
 | # | Check | Code | Kind |
 |---|---|---|---|
 | 1 | Is there an expiry date at all? | `c.NotAfter.IsZero()` | `NeverIssued` |
 | 2 | Is now after the expiry date? | `now.After(c.NotAfter)` | `Expired` |
-| 3 | Is the expiry on or before now + threshold? | `!c.NotAfter.After(now.Add(threshold))` | `ExpiringSoon` |
+| 3 | Is the renewal more than an hour late? | `isOverdue(c, now)` | `RenewalOverdue` |
 
 If all three are "no", the certificate is fine and isn't reported.
 
-**Inclusion is by dates only (ADR 0009).** A certificate with 5 failed attempts that expires in 60
-days is not reported. The diagnostics are shown for certificates that are already in the report,
-so the reader can see why a due certificate hasn't renewed.
+**There's no threshold.** cert-manager sets `status.renewalTime` on every issued certificate (by
+default 2/3 of the way through its lifetime) and starts renewing then. A successful renewal moves
+it forward, so a `renewalTime` in the past means renewal is due and hasn't happened. Each
+certificate gets its own window, with nothing to configure.
+
+**Inclusion is by dates only (ADR 0009).** A certificate with 5 failed attempts whose renewal isn't
+due yet is not reported. The diagnostics are shown for certificates that are already in the
+report, so the reader can see why a due certificate hasn't renewed.
 
 ### Reading the time comparisons
 
@@ -96,35 +100,46 @@ so the reader can see why a due certificate hasn't renewed.
 on `time.Time` (it's a struct), so the standard library provides `Before`, `After`, `Equal` and
 `Compare`.
 
-Example with `now` = Sep 24 and threshold 30 days (cutoff Oct 24):
+`isOverdue` is:
 
-```
-        Sep 20      Sep 24                 Oct 05        Oct 24             Dec 25
-  ────────●───────────|──────────────────────●─────────────|──────────────────●────
-     expired-cert    now                 soon-cert       cutoff           fine-cert
+```go
+if c.RenewalTime.IsZero() {
+	return false                                  // no renewal scheduled
+}
+if now.After(c.RenewalTime.Add(RenewalGrace)) {  // now > renewalTime + 1h
+	return true
+}
+return false
 ```
 
-| Cert | `now.After(expiry)` | `!expiry.After(cutoff)` | Result |
+Example with `now` = Sep 24, 12:00:
+
+| Cert | `NotAfter` | `RenewalTime` | Result |
 |---|---|---|---|
-| expired-cert (Sep 20) | true | — | `Expired` |
-| soon-cert (Oct 05) | false | true | `ExpiringSoon` |
-| fine-cert (Dec 25) | false | false | not reported |
+| expired-cert | Sep 20 | Aug 20 | `Expired` (check 2 wins, even though it's also overdue) |
+| stuck-cert | Oct 05 | Sep 14 | `RenewalOverdue`: 10 days late |
+| renewing-cert | Nov 01 | Sep 24, 11:30 | not reported: only 30 minutes late, inside the grace |
+| fine-cert | Dec 25 | Nov 25 | not reported: renewal not due |
 
 ### Boundaries
 
-- **Exactly at the threshold is included.** Go has no "at or before" method, so check 3 negates
-  `After`. Using `Before` would miss a cert expiring exactly at the cutoff.
+- **`RenewalGrace` is 1 hour, strictly after.** cert-manager starts renewing at `renewalTime`, so a
+  certificate is briefly past it while a normal renewal runs. Exactly 1 hour late is not reported;
+  1 hour and 1 nanosecond is.
+- **No `renewalTime` → never overdue.** The zero time plus an hour would be "overdue since year 1",
+  so `isOverdue` checks `IsZero` first.
 - **Exactly at `NotAfter` is not expired yet.** Matches `crypto/x509`: a certificate is valid at
   the instant of `NotAfter` and expired only after it.
 
-Both have test cases in `evaluate_test.go`, including "one nanosecond past threshold".
+All three have test cases in `evaluate_test.go`.
 
 ### Sort order
 
 Findings are sorted by `NotAfter`, then namespace, then name.
 
 - **Most urgent first.** The zero time sorts before every real date and past dates before future
-  ones, so sorting by `NotAfter` alone gives `NeverIssued` → `Expired` → soonest `ExpiringSoon`.
+  ones, so sorting by `NotAfter` alone gives `NeverIssued` → `Expired` → soonest-expiring
+  `RenewalOverdue`.
 - **Stable from day to day.** The API server returns objects in no guaranteed order. The
   namespace/name tie-break means the same certificates always appear in the same order, so today's
   email can be compared with yesterday's.

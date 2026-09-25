@@ -26,14 +26,18 @@ import (
 // parameter precisely so tests never depend on the real clock.
 var now = time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 
-const threshold = 30 * 24 * time.Hour // 30 days, the documented default
-
 func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
-// cert builds a CertStatus expiring at now+in. Use neverIssued for a cert
-// with no NotAfter.
-func cert(ns, name string, in time.Duration) CertStatus {
-	return CertStatus{Namespace: ns, Name: name, NotAfter: now.Add(in)}
+// issued builds a CertStatus that expires at now+expiresIn and that
+// cert-manager is due to renew at now+renewsIn (negative = in the past).
+func issued(ns, name string, expiresIn, renewsIn time.Duration) CertStatus {
+	return CertStatus{Namespace: ns, Name: name, NotAfter: now.Add(expiresIn), RenewalTime: now.Add(renewsIn)}
+}
+
+// overdue builds a CertStatus whose renewal is late by more than the grace
+// period and that expires at now+expiresIn.
+func overdue(ns, name string, expiresIn time.Duration) CertStatus {
+	return issued(ns, name, expiresIn, -2*RenewalGrace)
 }
 
 func neverIssued(ns, name string) CertStatus {
@@ -52,46 +56,64 @@ func TestEvaluate(t *testing.T) {
 			want:  nil,
 		},
 		{
-			name:  "outside threshold is not reported",
-			certs: []CertStatus{cert("default", "web", days(60))},
+			// Healthy: cert-manager hasn't reached the renewal time yet.
+			name:  "renewal time in the future is not reported",
+			certs: []CertStatus{issued("default", "web", days(60), days(30))},
 			want:  nil,
 		},
 		{
-			name:  "inside threshold is expiring soon",
-			certs: []CertStatus{cert("default", "web", days(10))},
-			want:  []Finding{{Cert: cert("default", "web", days(10)), Kind: KindExpiringSoon}},
+			// A renewal that started recently is probably still running.
+			name:  "renewal time passed within the grace period is not reported",
+			certs: []CertStatus{issued("default", "web", days(30), -30*time.Minute)},
+			want:  nil,
 		},
 		{
-			// "within 30 days" is inclusive.
-			name:  "exactly at threshold is expiring soon",
-			certs: []CertStatus{cert("default", "web", threshold)},
-			want:  []Finding{{Cert: cert("default", "web", threshold), Kind: KindExpiringSoon}},
+			name:  "exactly at the grace boundary is not reported",
+			certs: []CertStatus{issued("default", "web", days(30), -RenewalGrace)},
+			want:  nil,
 		},
 		{
-			name:  "one nanosecond past threshold is not reported",
-			certs: []CertStatus{cert("default", "web", threshold+time.Nanosecond)},
+			name:  "one nanosecond past the grace period is overdue",
+			certs: []CertStatus{issued("default", "web", days(30), -RenewalGrace-time.Nanosecond)},
+			want: []Finding{{
+				Cert: issued("default", "web", days(30), -RenewalGrace-time.Nanosecond),
+				Kind: KindRenewalOverdue,
+			}},
+		},
+		{
+			// No threshold any more: a cert close to expiry but not yet due
+			// for renewal (short renewBefore) is not reported (ADR 0012).
+			name:  "close to expiry but renewal not due is not reported",
+			certs: []CertStatus{issued("default", "web", days(2), days(1))},
+			want:  nil,
+		},
+		{
+			name:  "issued without a renewal time is not overdue",
+			certs: []CertStatus{{Namespace: "default", Name: "web", NotAfter: now.Add(days(30))}},
 			want:  nil,
 		},
 		{
 			// Failures alone never cause inclusion (ADR 0009); only dates do.
-			name: "failing but outside threshold is not reported",
+			name: "failing but renewal not due is not reported",
 			certs: []CertStatus{{
-				Namespace: "default", Name: "web", NotAfter: now.Add(days(60)),
+				Namespace: "default", Name: "web",
+				NotAfter: now.Add(days(60)), RenewalTime: now.Add(days(30)),
 				FailedIssuanceAttempts: 5, State: "errored", Reason: "connection refused",
 			}},
 			want: nil,
 		},
 		{
+			// Expired wins over overdue: an expired cert is also past renewal.
 			name:  "in the past is expired",
-			certs: []CertStatus{cert("default", "web", -days(1))},
-			want:  []Finding{{Cert: cert("default", "web", -days(1)), Kind: KindExpired}},
+			certs: []CertStatus{overdue("default", "web", -days(1))},
+			want:  []Finding{{Cert: overdue("default", "web", -days(1)), Kind: KindExpired}},
 		},
 		{
 			// Matches crypto/x509: a cert is still valid at the instant of
 			// NotAfter and expired only once now is after it.
-			name:  "exactly now is expiring soon, not expired",
-			certs: []CertStatus{cert("default", "web", 0)},
-			want:  []Finding{{Cert: cert("default", "web", 0), Kind: KindExpiringSoon}},
+			name:  "exactly now is overdue, not expired",
+			certs: []CertStatus{overdue("default", "web", 0)},
+			want:  []Finding{{Cert: overdue("default", "web", 0), Kind: KindRenewalOverdue}},
 		},
 		{
 			// The safety-net case: a cert cert-manager never managed to issue
@@ -116,17 +138,17 @@ func TestEvaluate(t *testing.T) {
 		{
 			name: "most urgent first",
 			certs: []CertStatus{
-				cert("default", "later", days(20)),
-				cert("default", "fine", days(90)),
-				cert("default", "expired", -days(3)),
+				overdue("default", "later", days(20)),
+				issued("default", "fine", days(90), days(60)),
+				overdue("default", "expired", -days(3)),
 				neverIssued("default", "broken"),
-				cert("default", "sooner", days(5)),
+				overdue("default", "sooner", days(5)),
 			},
 			want: []Finding{
 				{Cert: neverIssued("default", "broken"), Kind: KindNeverIssued},
-				{Cert: cert("default", "expired", -days(3)), Kind: KindExpired},
-				{Cert: cert("default", "sooner", days(5)), Kind: KindExpiringSoon},
-				{Cert: cert("default", "later", days(20)), Kind: KindExpiringSoon},
+				{Cert: overdue("default", "expired", -days(3)), Kind: KindExpired},
+				{Cert: overdue("default", "sooner", days(5)), Kind: KindRenewalOverdue},
+				{Cert: overdue("default", "later", days(20)), Kind: KindRenewalOverdue},
 			},
 		},
 		{
@@ -134,21 +156,21 @@ func TestEvaluate(t *testing.T) {
 			// shuffle rows from one day to the next.
 			name: "ties broken by namespace then name",
 			certs: []CertStatus{
-				cert("prod", "b", days(7)),
-				cert("dev", "z", days(7)),
-				cert("prod", "a", days(7)),
+				overdue("prod", "b", days(7)),
+				overdue("dev", "z", days(7)),
+				overdue("prod", "a", days(7)),
 			},
 			want: []Finding{
-				{Cert: cert("dev", "z", days(7)), Kind: KindExpiringSoon},
-				{Cert: cert("prod", "a", days(7)), Kind: KindExpiringSoon},
-				{Cert: cert("prod", "b", days(7)), Kind: KindExpiringSoon},
+				{Cert: overdue("dev", "z", days(7)), Kind: KindRenewalOverdue},
+				{Cert: overdue("prod", "a", days(7)), Kind: KindRenewalOverdue},
+				{Cert: overdue("prod", "b", days(7)), Kind: KindRenewalOverdue},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Evaluate(tt.certs, now, threshold)
+			got := Evaluate(tt.certs, now)
 
 			// Treat nil and empty as the same "nothing to report".
 			if len(got) == 0 && len(tt.want) == 0 {
@@ -164,12 +186,12 @@ func TestEvaluate(t *testing.T) {
 // Evaluate must not reorder the caller's slice while sorting its result.
 func TestEvaluate_DoesNotModifyInput(t *testing.T) {
 	certs := []CertStatus{
-		cert("default", "later", days(20)),
-		cert("default", "sooner", days(5)),
+		overdue("default", "later", days(20)),
+		overdue("default", "sooner", days(5)),
 	}
 	before := append([]CertStatus(nil), certs...) // an independent copy
 
-	Evaluate(certs, now, threshold)
+	Evaluate(certs, now)
 
 	if !reflect.DeepEqual(certs, before) {
 		t.Errorf("input was modified:\n  got  %+v\n  want %+v", certs, before)

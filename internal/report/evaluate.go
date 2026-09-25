@@ -31,9 +31,16 @@ const (
 	KindNeverIssued Kind = "NeverIssued"
 	// KindExpired means NotAfter is in the past.
 	KindExpired Kind = "Expired"
-	// KindExpiringSoon means NotAfter is at or before now+threshold.
-	KindExpiringSoon Kind = "ExpiringSoon"
+	// KindRenewalOverdue means cert-manager should have renewed the
+	// certificate by now (RenewalTime is more than RenewalGrace in the past)
+	// and hasn't (ADR 0012).
+	KindRenewalOverdue Kind = "RenewalOverdue"
 )
+
+// RenewalGrace is how long past RenewalTime a certificate may be before it's
+// reported. cert-manager starts renewing at RenewalTime, so this keeps
+// renewals that are still in progress out of the report (ADR 0012).
+const RenewalGrace = time.Hour
 
 // Finding is one certificate that needs attention, and why.
 type Finding struct {
@@ -42,14 +49,13 @@ type Finding struct {
 }
 
 // Evaluate returns the certificates that need attention as of now: never
-// issued, expired, or expiring within threshold. Findings are ordered most
-// urgent first (never issued, then soonest NotAfter; ties by namespace, then
-// name). certs is not modified.
+// issued, expired, or overdue for renewal. Findings are ordered most urgent
+// first (never issued, then soonest NotAfter; ties by namespace, then name).
+// certs is not modified.
 //
 // Inclusion depends on dates only; failure diagnostics never add a
-// certificate on their own (ADR 0009).
-func Evaluate(certs []CertStatus, now time.Time, threshold time.Duration) []Finding {
-
+// certificate on their own (ADR 0009, ADR 0012).
+func Evaluate(certs []CertStatus, now time.Time) []Finding {
 	var findings []Finding
 
 	for _, c := range certs {
@@ -57,14 +63,14 @@ func Evaluate(certs []CertStatus, now time.Time, threshold time.Duration) []Find
 			findings = append(findings, Finding{Cert: c, Kind: KindNeverIssued})
 		} else if now.After(c.NotAfter) {
 			findings = append(findings, Finding{Cert: c, Kind: KindExpired})
-		} else if !c.NotAfter.After(now.Add(threshold)) {
-			findings = append(findings, Finding{Cert: c, Kind: KindExpiringSoon})
+		} else if isOverdue(c, now) {
+			findings = append(findings, Finding{Cert: c, Kind: KindRenewalOverdue})
 		}
 	}
 
 	// The zero time sorts before any real date and past dates before future
 	// ones, so ordering by NotAfter alone already puts NeverIssued first,
-	// then Expired, then ExpiringSoon. Sorting findings (our own slice)
+	// then Expired, then RenewalOverdue. Sorting findings (our own slice)
 	// leaves the caller's certs untouched.
 	slices.SortFunc(findings, func(a, b Finding) int {
 		return cmp.Or(
@@ -75,4 +81,15 @@ func Evaluate(certs []CertStatus, now time.Time, threshold time.Duration) []Find
 	})
 
 	return findings
+}
+
+// isOverdue reports whether c's renewal is more than RenewalGrace late.
+func isOverdue(c CertStatus, now time.Time) bool {
+	if c.RenewalTime.IsZero() {
+		return false
+	}
+	if now.After(c.RenewalTime.Add(RenewalGrace)) {
+		return true
+	}
+	return false
 }

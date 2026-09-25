@@ -47,7 +47,6 @@ const (
 	nsA       = "cyclops-test-a"
 	nsB       = "cyclops-test-b"
 	nsMissing = "cyclops-test-missing" // deliberately never created
-	threshold = 30 * 24 * time.Hour
 )
 
 // kubeContext is the kubeconfig context to test against: $CLUSTER_CONTEXT,
@@ -104,12 +103,12 @@ func setup(t *testing.T) client.Client {
 	return c
 }
 
-// fixtureFindings runs Evaluate and returns "Kind ns/name" for findings in
-// the fixture namespaces only, so other certificates in the cluster don't
-// affect the result.
-func fixtureFindings(snap certmanager.Snapshot) []string {
+// fixtureFindings runs Evaluate as of at and returns "Kind ns/name" for
+// findings in the fixture namespaces only, so other certificates in the
+// cluster don't affect the result.
+func fixtureFindings(snap certmanager.Snapshot, at time.Time) []string {
 	var out []string
-	for _, f := range report.Evaluate(snap.CertStatuses(), time.Now(), threshold) {
+	for _, f := range report.Evaluate(snap.CertStatuses(), at) {
 		if f.Cert.Namespace == nsA || f.Cert.Namespace == nsB {
 			out = append(out, string(f.Kind)+" "+f.Cert.Namespace+"/"+f.Cert.Name)
 		}
@@ -120,11 +119,9 @@ func fixtureFindings(snap certmanager.Snapshot) []string {
 func TestListing(t *testing.T) {
 	c := setup(t)
 
-	// Most urgent first (report.Evaluate's order).
-	wantFindings := []string{
-		"NeverIssued " + nsB + "/broken",
-		"ExpiringSoon " + nsA + "/expiring",
-	}
+	// Today only the broken cert needs attention: the others were just
+	// issued, so cert-manager isn't due to renew them yet.
+	wantNow := []string{"NeverIssued " + nsB + "/broken"}
 
 	t.Run("explicit namespaces", func(t *testing.T) {
 		snap, err := certmanager.List(context.Background(), c, []string{nsA, nsB, nsMissing})
@@ -140,11 +137,8 @@ func TestListing(t *testing.T) {
 		if want := []string{nsA + "/expiring", nsA + "/healthy", nsB + "/broken"}; !reflect.DeepEqual(certs, want) {
 			t.Errorf("Certificates = %v, want %v", certs, want)
 		}
-		if want := []string{nsMissing}; !reflect.DeepEqual(snap.MissingNamespaces, want) {
-			t.Errorf("MissingNamespaces = %v, want %v", snap.MissingNamespaces, want)
-		}
-		if got := fixtureFindings(snap); !reflect.DeepEqual(got, wantFindings) {
-			t.Errorf("findings = %v, want %v", got, wantFindings)
+		if got := fixtureFindings(snap, time.Now()); !reflect.DeepEqual(got, wantNow) {
+			t.Errorf("findings = %v, want %v", got, wantNow)
 		}
 	})
 
@@ -154,11 +148,28 @@ func TestListing(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if len(snap.MissingNamespaces) != 0 {
-			t.Errorf("MissingNamespaces = %v, want none", snap.MissingNamespaces)
+		if got := fixtureFindings(snap, time.Now()); !reflect.DeepEqual(got, wantNow) {
+			t.Errorf("findings = %v, want %v", got, wantNow)
 		}
-		if got := fixtureFindings(snap); !reflect.DeepEqual(got, wantFindings) {
-			t.Errorf("findings = %v, want %v", got, wantFindings)
+	})
+
+	// A real overdue renewal would take hours to produce, so evaluate the
+	// same snapshot as of a later date instead. cert-manager renews at 2/3
+	// of a certificate's lifetime by default, so 15 days from now is past
+	// expiring's renewal time (~day 13 of 20) but before it expires, and
+	// still well before healthy's (~day 60 of 90).
+	t.Run("renewal overdue as of 15 days from now", func(t *testing.T) {
+		snap, err := certmanager.List(context.Background(), c, []string{nsA, nsB})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := []string{
+			"NeverIssued " + nsB + "/broken",
+			"RenewalOverdue " + nsA + "/expiring",
+		}
+		if got := fixtureFindings(snap, time.Now().Add(15*24*time.Hour)); !reflect.DeepEqual(got, want) {
+			t.Errorf("findings = %v, want %v", got, want)
 		}
 	})
 }

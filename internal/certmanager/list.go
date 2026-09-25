@@ -18,12 +18,9 @@ package certmanager
 
 import (
 	"context"
-	"slices"
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/sakshitposting-irl/cyclops/internal/report"
@@ -35,15 +32,12 @@ type Snapshot struct {
 	Requests     []cmapi.CertificateRequest
 	Orders       []acmev1.Order
 	Challenges   []acmev1.Challenge
-
-	// MissingNamespaces are entries from the requested namespaces that don't
-	// exist in the cluster. They are reported, not ignored (ADR 0010).
-	MissingNamespaces []string
 }
 
 // List reads Certificates, CertificateRequests, Orders and Challenges from
 // the given namespaces. Empty namespaces means all namespaces, read with one
-// cluster-wide List per kind (ADR 0010).
+// cluster-wide List per kind (ADR 0010). A namespace that doesn't exist
+// contributes nothing; the controller reports it (ADR 0011).
 func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, error) {
 	var snap Snapshot
 
@@ -66,20 +60,6 @@ func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, 
 	}
 
 	for _, ns := range namespaces {
-		// Listing in a namespace that doesn't exist returns an empty list, not
-		// an error, so a typo would look like "no certificates". Get the
-		// Namespace itself, which does return NotFound.
-		if ns != "" {
-			var nsObj corev1.Namespace
-			if err := c.Get(ctx, client.ObjectKey{Name: ns}, &nsObj); err != nil {
-				if apierrors.IsNotFound(err) {
-					snap.MissingNamespaces = append(snap.MissingNamespaces, ns)
-					continue
-				}
-				return snap, err
-			}
-		}
-
 		var certList cmapi.CertificateList
 		if err := c.List(ctx, &certList, client.InNamespace(ns)); err != nil {
 			return snap, err
@@ -104,9 +84,6 @@ func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, 
 		}
 		snap.Challenges = append(snap.Challenges, challengeList.Items...)
 	}
-
-	// Sorted so the report is the same however spec.namespaces is ordered.
-	slices.Sort(snap.MissingNamespaces)
 
 	return snap, nil
 }

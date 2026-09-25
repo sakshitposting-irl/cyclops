@@ -18,8 +18,10 @@ works is described in [`../internals/`](../README.md#internals).
 | 6 | Scheduling model: controller reconciles CR and owns a child `CronJob` | [0006-scheduling-model.md](0006-scheduling-model.md) |
 | 7 | Notification channels: typed `notifiers` list in the CRD now; only `Email` implemented in v1, `Webhook` deferred to v2 | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
-| 9 | Report inclusion: by expiry only; failure diagnostics shown but never cause inclusion | [0009-report-inclusion.md](0009-report-inclusion.md) |
-| 10 | Watch scope: `spec.namespaces` list (empty = all); missing namespaces reported; read-only ClusterRole | [0010-watch-scope.md](0010-watch-scope.md) |
+| 9 | Report inclusion: by dates only; failure diagnostics shown but never cause inclusion (threshold superseded by 12) | [0009-report-inclusion.md](0009-report-inclusion.md) |
+| 10 | Watch scope: `spec.namespaces` list (empty = all); read-only ClusterRole (missing-namespace handling superseded by 11) | [0010-watch-scope.md](0010-watch-scope.md) |
+| 11 | Namespace validation: controller sets a `NamespacesFound` condition and watches Namespaces; not in the email | [0011-namespace-validation.md](0011-namespace-validation.md) |
+| 12 | Inclusion rule: never issued, expired, or past own `renewalTime` by >1h; no threshold | [0012-renewal-overdue.md](0012-renewal-overdue.md) |
 
 ## Open / not yet decided
 

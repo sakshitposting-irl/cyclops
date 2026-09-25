@@ -1,7 +1,9 @@
 # 9. What puts a certificate in the report
 
 ## Status
-Decided
+Decided. The fixed-threshold part is superseded by
+[ADR 0012](0012-renewal-overdue.md): certificates are reported once past their
+own `renewalTime`. "Dates decide inclusion, failures never do" still stands.
 
 ## Context
 ADR 0004 added failure diagnostics (`FailedIssuanceAttempts`, `State`,

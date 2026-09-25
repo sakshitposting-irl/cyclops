@@ -1,7 +1,9 @@
 # 10. Watch scope and RBAC
 
 ## Status
-Decided
+Decided. The "missing namespaces are reported" part is superseded by
+[ADR 0011](0011-namespace-validation.md): namespaces are validated by the
+controller instead, and report mode no longer checks them.
 
 ## Context
 ADR 0002 made `CertReport` cluster-scoped, with a spec field controlling

@@ -82,10 +82,9 @@ const missingNS = "prodd"
 
 func TestList(t *testing.T) {
 	tests := []struct {
-		name        string
-		namespaces  []string
-		wantFrom    []string // namespaces every kind's items should come from
-		wantMissing []string
+		name       string
+		namespaces []string
+		wantFrom   []string // namespaces every kind's items should come from
 	}{
 		{
 			name:       "empty means all namespaces",
@@ -98,18 +97,11 @@ func TestList(t *testing.T) {
 			wantFrom:   []string{"a"},
 		},
 		{
-			// A typo must be reported, or the report would look clean.
-			name:        "missing namespace is reported",
-			namespaces:  []string{"a", missingNS},
-			wantFrom:    []string{"a"},
-			wantMissing: []string{missingNS},
-		},
-		{
-			// Sorted, so reordering spec.namespaces doesn't change the report.
-			name:        "missing namespaces sorted",
-			namespaces:  []string{"typo", "a", missingNS},
-			wantFrom:    []string{"a"},
-			wantMissing: []string{missingNS, "typo"},
+			// Reporting it is the controller's job (ADR 0011); List just
+			// finds nothing there and carries on with the others.
+			name:       "missing namespace contributes nothing",
+			namespaces: []string{"a", missingNS},
+			wantFrom:   []string{"a"},
 		},
 		{
 			// Listing a namespace twice would put its certs in the email twice.
@@ -135,9 +127,6 @@ func TestList(t *testing.T) {
 				if !reflect.DeepEqual(got, tt.wantFrom) {
 					t.Errorf("%s from namespaces %v, want %v", kind, got, tt.wantFrom)
 				}
-			}
-			if !reflect.DeepEqual(snap.MissingNamespaces, tt.wantMissing) {
-				t.Errorf("MissingNamespaces = %v, want %v", snap.MissingNamespaces, tt.wantMissing)
 			}
 		})
 	}
