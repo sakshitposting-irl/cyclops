@@ -16,7 +16,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 4 | Failure diagnostics: structured fields + raw `Reason` passthrough, no message categorization | [0004-failure-diagnostics.md](0004-failure-diagnostics.md) |
 | 5 | Email templating: default `html/template`, overridable via ConfigMap reference | [0005-email-templating.md](0005-email-templating.md) |
 | 6 | Scheduling model: controller reconciles CR and owns a child `CronJob` | [0006-scheduling-model.md](0006-scheduling-model.md) |
-| 7 | Notification channels: typed `notifiers` list in the CRD now; only `Email` implemented in v1, `Webhook` deferred to v2 | [0007-notification-channels.md](0007-notification-channels.md) |
+| 7 | Notification channels: typed `notifiers` list in the CRD; v1 ships both `Email` and `Webhook` (revised; originally webhook was deferred to v2) | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
 | 9 | Report inclusion: by dates only; failure diagnostics shown but never cause inclusion (threshold superseded by 12) | [0009-report-inclusion.md](0009-report-inclusion.md) |
 | 10 | Watch scope: `spec.namespaces` list (empty = all); read-only ClusterRole (missing-namespace handling superseded by 11) | [0010-watch-scope.md](0010-watch-scope.md) |
@@ -42,12 +42,32 @@ works is described in [`../internals/`](../README.md#internals).
 - Packaging (ADR 0016): ship a Helm chart as the supported install path.
   ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
   project currently deploys with kubebuilder's kustomize `config/`, and
-  kubebuilder's helm plugin can generate a chart from it.
+  kubebuilder's helm plugin can generate a chart from it. Deferred until
+  the report/controller code is done. Findings so far:
+  - **Plugin test:** kubebuilder 4.16 `helm/v2-alpha`, run on a scratch
+    clone. On a plain regenerate it overwrites its own generated templates
+    (manager, rbac, crd) and keeps `values.yaml`, our own template
+    directories and `values.schema.json`. `--force` also resets
+    `values.yaml`.
+  - **CRDs:** it already puts them in `templates/` with `crd.enabled` and
+    `crd.keep` (`helm.sh/resource-policy: keep`).
+  - **Leaning towards:**
+    - the chart in this repo, at `charts/cyclops`;
+    - Helm as the only install path;
+    - OCI publishing to GHCR.
 - State & dedup: how to avoid re-alerting on the same cert every single day
   once it's reported, and where that state lives. ADR 0015 settles the
   empty-report part (no email; a one-time welcome instead) and adds a
   per-`CertReport` state ConfigMap that may be the natural place for dedup
   state too.
+- Webhook notifier specifics (v1, ADR 0007): the questions and options are
+  parked in [0017-webhook-notifier.md](0017-webhook-notifier.md). They
+  cover:
+  - where the URL and credentials live;
+  - whether ADR 0015 applies;
+  - auth;
+  - retries (these affect email Jobs too);
+  - the JSON schema.
 - HA / leader election posture for the controller (the reconciler managing
   the CronJob is lightweight, but still worth deciding explicitly).
 - Observability: metrics/logging expectations. Since ADR 0015 means no

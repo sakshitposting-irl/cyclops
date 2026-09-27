@@ -1,13 +1,14 @@
 # Report pipeline
 
 What report mode does with cert-manager's data: turn it into cyclops's own view of each
-certificate, decide which ones need attention, put them in a stable order, and render the email.
+certificate, decide which ones need attention, put them in a stable order, render the email and
+send it.
 
 ```
 list ──────────────▶ convert ──────────────▶ evaluate ─────────▶ render ──────────────────▶ send
-internal/certmanager  internal/certmanager     internal/report     internal/render              (not built yet)
-List → Snapshot       Snapshot.CertStatuses    Evaluate            NewTemplateData → Render,
-                      (ToCertStatus per cert)                      Subject
+internal/certmanager  internal/certmanager     internal/report     internal/render              internal/email
+List → Snapshot       Snapshot.CertStatuses    Evaluate            NewTemplateData → Render,    FromEnv → Sender.Send
+                      (ToCertStatus per cert)                      Subject                      (stubbed, TODO)
 ```
 
 | Package | Knows about | Tested with |
@@ -15,6 +16,7 @@ List → Snapshot       Snapshot.CertStatuses    Evaluate            NewTemplate
 | `internal/certmanager` | cert-manager's API types; the only package that imports them | hand-built objects and controller-runtime's fake client, no cluster |
 | `internal/report` | plain Go: `CertStatus`, `Finding`, `time.Time` | table tests, fixed `now` |
 | `internal/render` | `report.Finding` and `html/template`; the template data contract | table tests, rendered-output checks |
+| `internal/email` | `net/smtp`, the AWS SESv2 SDK, env vars; nothing about certificates | an in-process fake SMTP server (real TLS), a fake SES client |
 | `test/cluster` | the whole pipeline up to `Evaluate` | a real kind cluster with cert-manager (`make test-cluster`) |
 
 Keeping cert-manager at the edge means the decision logic can be tested without a cluster, and a
@@ -328,15 +330,19 @@ a new ADR.
 - **Inline styles.** Email clients strip `<style>` blocks and don't support CSS variables, so
   every element carries its own `style="..."`.
 - **`<meta charset="utf-8">`.** Without it, clients guess Windows-1252 and `—` shows as `â€”`.
-  When sending is built, the email also needs a `Content-Type: text/html; charset=UTF-8` header.
-- **Empty report.** No findings renders an "all clear" body. Whether to send it at all is part of
-  the open dedup decision.
+  The senders must also declare UTF-8: a `Content-Type` header for SMTP, `Charset` for SES.
+- **Empty report.** No findings renders an "all clear" body. Scheduled runs never send it
+  (ADR 0015); only the one-time welcome email can be sent with no findings.
 
 ---
 
 ## Not built yet
 
-- **Sending** via the notifiers: SES and SMTP (ADR 0007/0008).
+- **Sending** (`internal/email`): the types, signatures, env variable names and tests are in
+  place, and every function body is a `TODO(user)` listing the steps (strict STARTTLS, no
+  skip-verify, CR/LF rejection, quoted-printable body; ADR 0014). The tests in the package are
+  the spec: they run the SMTP sender against an in-process fake server with real TLS, and the SES
+  sender against a fake client.
 - **Custom templates** from a ConfigMap (ADR 0005), which needs the `CertReport` schema.
 - **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

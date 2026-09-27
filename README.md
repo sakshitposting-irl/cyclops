@@ -1,8 +1,9 @@
 # cyclops
 
 A Kubernetes controller that watches [cert-manager](https://cert-manager.io) `Certificate`
-resources and emails a daily report of certificates that are expired, were never issued, or are
-overdue for renewal (past the renewal time cert-manager set for them).
+resources and sends a scheduled report of certificates that are expired, were never issued, or
+are overdue for renewal (past the renewal time cert-manager set for them). Reports go out by
+email (SES or SMTP) or webhook (a fixed, versioned JSON payload).
 
 cert-manager renews certificates automatically. cyclops is the backstop for when that renewal
 silently fails.
@@ -20,13 +21,15 @@ flowchart LR
     CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
     JOB -->|lists| CM["cert-manager<br/>Certificates"]
     JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
+    JOB -->|sends| HOOK["Webhook<br/>(JSON)"]
 ```
 
 1. You create a cluster-scoped `CertReport` describing the schedule, which namespaces to cover and who
    to notify.
 2. The controller keeps a Kubernetes `CronJob` in sync with it.
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists every cert-manager
-   `Certificate`, picks out the ones that need attention, and emails the report.
+   `Certificate`, picks out the ones that need attention, and sends the report to each notifier.
+   There are two notifier types, `Email` and `Webhook` (a fixed, versioned JSON payload).
 
 For certificates that are due, the report also shows cert-manager's own diagnostics (failed
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
@@ -42,7 +45,8 @@ happening.
 | Listing certificates from the cluster (`internal/certmanager`) | ✅ done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation | ⏳ not started |
 | Email rendering (`internal/render`) | ✅ done, tested |
-| Email sending (SES, SMTP) | ⏳ not started |
+| Email sending (SES, SMTP) (`internal/email`) | 🚧 tests written, implementation stubbed (`TODO(user)`) |
+| Webhook sending | ⏳ not started; design partly open |
 | `CertReport` schema | ⏳ placeholder |
 
 ## Documentation

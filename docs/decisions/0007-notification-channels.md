@@ -1,7 +1,9 @@
 # 7. Notification channels — structure, and v1 scope
 
 ## Status
-Decided
+Decided. The v1 scope was revised: webhook delivery now ships in v1
+alongside email (see "v1 scope" below). The list structure and the webhook
+payload decision are unchanged.
 
 ## Context
 The project should eventually support both email and webhook delivery.
@@ -29,20 +31,31 @@ receiver configs, each independently sent to.
 
 Decision: **typed notifier list.**
 
-## v1 scope: email only, webhook deferred to v2
+## v1 scope: email and webhook
 
-Webhook support is real scope, but not part of the originally stated goal
-(SES/SMTP email was explicit from the start; webhook came up later in
-design discussion). Decision: **implement only `type: Email` in v1**;
-`type: Webhook` is reserved for v2.
+**Originally decided:** email only in v1, webhook deferred to v2. Webhook
+support was real scope but not part of the originally stated goal (SES/SMTP
+email was explicit from the start; webhook came up later in design
+discussion). Only `type: Email` would be implemented in v1, with
+`type: Webhook` reserved.
 
-Follow-on decision: since the list shape was already agreed as the right
-long-term structure, we adopt the `notifiers: [...]` list shape in the
-CRD **now**, even though only `Email` is implemented, rather than shipping
-a simpler singular `spec.email: {...}` field for v1. This avoids a
-breaking CRD schema change (and associated version bump / conversion
-webhook) when webhook support is added in v2 — the addition becomes purely
-a new `type` case in an already-existing array.
+**Revised:** v1 ships **both `type: Email` and `type: Webhook`**. Moving it
+forward is cheap:
+- the payload shape was already decided (below), so the webhook contract is
+  known;
+- the list structure makes it additive: a second `type` case, with no
+  schema change to existing `Email` notifiers.
+
+The list shape stands for the same reason as before: adding further
+channel types later is a new `type` case in an existing array, not a
+breaking CRD change.
+
+Webhook specifics are not decided here; they are parked in
+[ADR 0017](0017-webhook-notifier.md) (open). They cover
+where the URL and any auth credentials live (per
+`CertReport`, or once per install like email in ADR 0014), whether ADR
+0015's "nothing sent when empty" and welcome message apply to webhooks,
+retries and timeouts, and the exact versioned JSON schema.
 
 ## Webhook payload shape (decided ahead of implementation, for the CRD
 contract's sake)
