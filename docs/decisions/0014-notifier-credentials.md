@@ -4,7 +4,7 @@
 Decided. Supersedes the per-notifier `provider: SES | SMTP` part of
 [ADR 0008](0008-email-providers.md): the provider is now chosen at install
 time, not per notifier. Depends on packaging cyclops as a Helm chart, which
-is recorded separately (ADR 0015, open).
+is recorded separately (ADR 0016, open).
 
 ## Context
 ADR 0008 put both SES and SMTP in v1 and left their credentials open. The
