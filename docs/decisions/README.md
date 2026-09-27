@@ -23,6 +23,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 11 | Namespace validation: controller sets a `NamespacesFound` condition and watches Namespaces; not in the email | [0011-namespace-validation.md](0011-namespace-validation.md) |
 | 12 | Inclusion rule: never issued, expired, or past own `renewalTime` by >1h; no threshold | [0012-renewal-overdue.md](0012-renewal-overdue.md) |
 | 13 | Template data: flat `TemplateData`/`Row` contract for all templates; additive changes only | [0013-template-data.md](0013-template-data.md) |
+| 14 | Email delivery: SES/SMTP settings set once per install (Helm values → ConfigMap); credentials in hand-made Secrets in the cyclops namespace, injected as env vars; SES ambient-first; strict STARTTLS; `CredentialsFound` condition (supersedes per-notifier provider in 8) | [0014-notifier-credentials.md](0014-notifier-credentials.md) |
 
 ## Open / not yet decided
 
@@ -37,8 +38,10 @@ works is described in [`../internals/`](../README.md#internals).
   request's condition, or the request's plus the Issuer's (needs read RBAC on
   Issuers/ClusterIssuers, revising ADR 0010).
 
-- Credential handling specifics for SES vs SMTP (IAM vs access keys vs
-  SMTP host/user/pass/TLS, Secret shapes).
+- Packaging (ADR 0015): ship a Helm chart as the supported install path.
+  ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
+  project currently deploys with kubebuilder's kustomize `config/`, and
+  kubebuilder's helm plugin can generate a chart from it.
 - State & dedup: how to avoid re-alerting on the same cert every single day
   once it's reported, and where that state lives. Also decides whether an
   email is sent when there's nothing to report.

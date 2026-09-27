@@ -1,7 +1,9 @@
 # 8. Email providers: SES and SMTP, both in v1
 
 ## Status
-Decided
+Decided. Where the provider is chosen is superseded by
+[ADR 0014](0014-notifier-credentials.md): it's set once per install in Helm
+values, not per notifier. Both providers remain in v1.
 
 ## Context
 Within the `Email` notifier type (ADR 0007), the underlying transport can
@@ -29,7 +31,6 @@ design discussion.
 **Both SES and SMTP** are in scope for v1, as `provider: SES | SMTP` under
 the `Email` notifier type from ADR 0007.
 
-## Open follow-on
-Credential handling specifics for each provider (IAM role vs access keys
-for SES; host/user/password/TLS settings and Secret shape for SMTP) are
-not yet decided — see the open items list in the decisions README.
+## Follow-on
+Credential handling for each provider is decided in
+[ADR 0014](0014-notifier-credentials.md).
