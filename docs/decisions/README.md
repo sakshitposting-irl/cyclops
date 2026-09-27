@@ -67,6 +67,8 @@ works is described in [`../internals/`](../README.md#internals).
   - whether ADR 0015 applies;
   - auth;
   - retries (these affect email Jobs too);
+  - Slack/Teams payload formats (may reopen ADR 0007's generic-schema
+    decision);
   - the JSON schema.
 - HA / leader election posture for the controller (the reconciler managing
   the CronJob is lightweight, but still worth deciding explicitly).

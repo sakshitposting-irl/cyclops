@@ -84,7 +84,48 @@ re-send email that was already delivered.
   - Cons: every retry re-sends to all notifiers, including ones that
     already succeeded.
 
-### 5. The exact JSON schema
+### 5. Chat services need their own payload formats
+This may reopen ADR 0007's payload decision.
+
+The receivers people will most likely point cyclops at don't accept
+arbitrary JSON; the body has to match what the service expects:
+- **Slack incoming webhooks** need `text` and/or `blocks` (Block Kit).
+  Slack Workflow Builder webhooks accept custom keys, but only flat,
+  declared variables.
+- **Teams** has moved from Office 365 connectors (MessageCard) to Workflows
+  (Power Automate) webhooks, which typically expect an Adaptive Card. A
+  flow can parse arbitrary JSON, but someone has to build it.
+- The Teams details need verifying before deciding; the platform has
+  changed more than once.
+
+Options:
+- **A. Generic schema only, as ADR 0007 says** (the Alertmanager model)
+  - Pros: one stable contract; no need to track vendor formats.
+  - Cons: Slack/Teams users need a relay or adapter (or a Slack workflow /
+    Power Automate flow) to reshape the payload, which is extra
+    infrastructure for the most common case.
+- **B. Built-in formats: `format: Generic | Slack | Teams`**
+  - Cyclops emits a native Block Kit or Adaptive Card payload itself.
+  - Pros: works directly with an incoming webhook URL.
+  - Cons: more code and tests; the Teams format in particular has changed
+    before and could change again; every new chat service asks for a new
+    format.
+- **C. User-templated payloads** (`text/template` over the ADR 0013 data)
+  - Pros: fits any receiver.
+  - Cons: ADR 0007 rejected this deliberately: a second templating engine,
+    JSON escaping pitfalls, and no stable contract for programs.
+- **D. Generic schema plus a top-level `text` summary**
+  - Slack incoming webhooks render `text` and ignore unknown fields, so
+    Slack would show a one-line summary with no relay. Teams still needs a
+    flow.
+  - Pros: a small addition to A.
+  - Cons: only a partial answer, and it relies on Slack ignoring the
+    extra keys.
+
+If B or D is chosen, question 3 (auth) changes: Slack and Teams
+authenticate through the secret URL alone, not a header or signature.
+
+### 6. The exact JSON schema
 ADR 0007 fixes the approach: a versioned schema, the same for every
 receiver, with no templating, following Alertmanager's webhook receiver.
 Still to settle:
@@ -92,3 +133,6 @@ Still to settle:
   ADR 0013;
 - the version field;
 - how the welcome payload is marked, if question 2 settles on A.
+
+This depends on question 5: with option B, "the schema" is one generic
+schema plus each built-in format.
