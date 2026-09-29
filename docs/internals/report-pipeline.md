@@ -8,7 +8,7 @@ send it.
 list ──────────────▶ convert ──────────────▶ evaluate ─────────▶ render ──────────────────▶ send
 internal/certmanager  internal/certmanager     internal/report     internal/render              internal/email
 List → Snapshot       Snapshot.CertStatuses    Evaluate            NewTemplateData → Render,    FromEnv → Sender.Send
-                      (ToCertStatus per cert)                      Subject                      (stubbed, TODO)
+                      (ToCertStatus per cert)                      Subject                      (SMTP partly built)
 ```
 
 | Package | Knows about | Tested with |
@@ -338,11 +338,15 @@ a new ADR.
 
 ## Not built yet
 
-- **Sending** (`internal/email`): the types, signatures, env variable names and tests are in
-  place, and every function body is a `TODO(user)` listing the steps (strict STARTTLS, no
-  skip-verify, CR/LF rejection, quoted-printable body; ADR 0014). The tests in the package are
-  the spec: they run the SMTP sender against an in-process fake server with real TLS, and the SES
-  sender against a fake client.
+- **Sending** (`internal/email`), partly built. The types, signatures, env variable names and
+  tests are in place (strict STARTTLS, no skip-verify, CR/LF rejection, quoted-printable body;
+  ADR 0014). The tests in the package are the spec: they run the SMTP sender against an
+  in-process fake server with real TLS, and the SES sender against a fake client.
+  - Done: `parse`/`parseAddress` (CR/LF rejection), `NewSMTP` (validation and port/TLS
+    defaults), `tlsConfig`, `buildMIME`, `messageID`.
+  - In progress: `SMTP.Send`. The dial, connection deadline and cancellation are written; the
+    TLS modes, AUTH and the MAIL/RCPT/DATA exchange are not.
+  - Still `TODO(user)`: the SES sender and `FromEnv`.
 - **Custom templates** from a ConfigMap (ADR 0005), which needs the `CertReport` schema.
 - **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

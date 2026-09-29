@@ -24,6 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"strings"
+)
+
+const (
+	escapeChar = "\n\r"
 )
 
 // Message is one email: the rendered report, and who it goes to.
@@ -54,17 +59,39 @@ type parsedMessage struct {
 // mail headers, so a CR or LF in them could add headers of their own (e.g. a
 // Bcc); they are rejected rather than stripped.
 func parse(msg Message) (parsedMessage, error) {
-	// TODO(user): implement, returning an error (and nothing else) if:
-	//   - Subject contains "\r" or "\n";
-	//   - From isn't a valid address (use parseAddress);
-	//   - To is empty, or any entry isn't a valid address.
-	// On success, return the parsed From and To alongside msg.
-	return parsedMessage{}, errors.New("email: parse not implemented")
+	if strings.ContainsAny(msg.Subject, escapeChar) {
+		return parsedMessage{}, errors.New("email: subject contains CR or LF")
+	}
+	mailFrom, err := parseAddress(msg.From)
+	if err != nil {
+		return parsedMessage{}, fmt.Errorf("email: invalid From address: %w", err)
+	}
+	if len(msg.To) == 0 {
+		return parsedMessage{}, errors.New("email: To field is empty")
+	}
+	var mailTo []*mail.Address
+	for _, addr := range msg.To {
+		parsedAddr, err := parseAddress(addr)
+		if err != nil {
+			return parsedMessage{}, fmt.Errorf("email: invalid To address %q: %w", addr, err)
+		}
+		mailTo = append(mailTo, parsedAddr)
+	}
+	return parsedMessage{
+		from:    mailFrom,
+		to:      mailTo,
+		Message: msg,
+	}, nil
 }
 
 // parseAddress parses one address, rejecting CR/LF before net/mail sees it.
 func parseAddress(s string) (*mail.Address, error) {
-	// TODO(user): reject s if it contains "\r" or "\n", then parse it with
-	// mail.ParseAddress, wrapping the error with the offending address.
-	return nil, fmt.Errorf("email: parseAddress(%q) not implemented", s)
+	if strings.ContainsAny(s, escapeChar) {
+		return nil, errors.New("email: address contains CR or LF")
+	}
+	addr, err := mail.ParseAddress(s)
+	if err != nil {
+		return nil, fmt.Errorf("email: invalid address %q: %w", s, err)
+	}
+	return addr, nil
 }

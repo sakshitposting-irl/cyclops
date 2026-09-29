@@ -17,10 +17,18 @@ limitations under the License.
 package email
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
+	"mime"
+	"mime/quotedprintable"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -84,7 +92,38 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 	//   4. Username and Password must be set together, or both empty.
 	//   5. TLSNone with credentials is an error: they'd be sent in plaintext.
 	// Return &SMTP{cfg: cfg, now: time.Now} with the defaults filled in.
-	return nil, errors.New("smtp: NewSMTP not implemented")
+	if cfg.Host == "" {
+		return nil, errors.New("smtp: Host is required")
+	}
+	if cfg.TLS == "" {
+		cfg.TLS = TLSStartTLS
+	}
+	if cfg.TLS != TLSStartTLS && cfg.TLS != TLSImplicit && cfg.TLS != TLSNone {
+		return nil, errors.New("smtp: TLS must be one of StartTLS, TLS, None")
+	}
+	if cfg.Port == 0 {
+		switch cfg.TLS {
+		case TLSStartTLS:
+			cfg.Port = 587
+		case TLSImplicit:
+			cfg.Port = 465
+		case TLSNone:
+			cfg.Port = 25
+		}
+	} else if cfg.Port < 1 || cfg.Port > 65535 {
+		return nil, errors.New("smtp: Port must be 1-65535")
+	}
+	if (cfg.Username == "") != (cfg.Password == "") {
+		return nil, errors.New("smtp: Username and Password must be set together or both empty")
+	}
+	if (cfg.Username == "" && cfg.Password != "") || (cfg.Password == "" && cfg.Username != "") {
+		return nil, errors.New("smtp: Username and Password must be set together or both empty")
+	}
+	if cfg.TLS == TLSNone && cfg.Username != "" {
+		return nil, errors.New("smtp: TLSNone cannot be used with credentials")
+	}
+
+	return &SMTP{cfg: cfg, now: time.Now}, nil
 }
 
 // Send delivers msg in one SMTP session.
@@ -106,6 +145,42 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	//   7. MAIL FROM, RCPT TO for every recipient (bare addresses), DATA,
 	//      write the MIME bytes, Close the writer (the server accepts or
 	//      rejects here), then Quit, ignoring its error.
+
+	pm, err := parse(msg)
+	if err != nil {
+		return err
+	}
+
+	mimeBytes, err := buildMIME(message, s.now())
+	if err != nil {
+		return err
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
+		defer cancel()
+	}
+
+	dialer := &net.Dialer{}
+	dialer.Timeout = defaultTimeout
+
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port)))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return err
+		}
+	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.SetDeadline(time.Now())
+	})
+	defer stop()
+
 	return errors.New("smtp: Send not implemented")
 }
 
@@ -113,20 +188,82 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 func (s *SMTP) tlsConfig() *tls.Config {
 	// TODO(user): ServerName: s.cfg.Host, RootCAs: s.rootCAs, MinVersion:
 	// tls.VersionTLS12. Never InsecureSkipVerify (ADR 0014).
-	return nil
+
+	t := &tls.Config{
+		ServerName: s.cfg.Host,
+		RootCAs:    s.rootCAs,
+		MinVersion: tls.VersionTLS12,
+	}
+	return t
 }
 
 // buildMIME renders pm as a complete message: headers, then the HTML body
 // as quoted-printable, which keeps lines under SMTP's 998-byte limit however
 // long the template's lines are.
 func buildMIME(pm parsedMessage, now time.Time) ([]byte, error) {
-	// TODO(user): implement. CRLF line endings throughout. Headers:
-	//   Date (now, time.RFC1123Z), From and To (mail.Address.String()),
-	//   Subject (mime.QEncoding.Encode("utf-8", ...)), Message-ID (messageID),
-	//   MIME-Version: 1.0, Content-Type: text/html; charset="UTF-8",
-	//   Content-Transfer-Encoding: quoted-printable.
-	// Then a blank line and the body through quotedprintable.NewWriter.
-	return nil, errors.New("email: buildMIME not implemented")
+	// TODO(user): implement. Build the message in a bytes.Buffer, ending every
+	// line with "\r\n". Write these headers, one "Name: value" line each:
+	//   1. Date: now.Format(time.RFC1123Z)
+	//   2. From: pm.from.String()
+	//   3. To: every pm.to[i].String(), joined with ", "
+	//   4. Subject: mime.QEncoding.Encode("utf-8", pm.Subject)
+	//   5. Message-ID: messageID(pm.from.Address); return its error if it fails
+	//   6. MIME-Version: 1.0
+	//   7. Content-Type: text/html; charset="UTF-8"
+	//   8. Content-Transfer-Encoding: quoted-printable
+	// Then one empty line ("\r\n") to end the headers. Then write
+	// pm.HTMLBody through quotedprintable.NewWriter(&buf), and Close() that
+	// writer (checking its error) so the last bytes are flushed into buf.
+	// Return buf.Bytes().
+
+	mimeBuffer := &bytes.Buffer{}
+
+	mimeBuffer.WriteString("Date: ")
+	mimeBuffer.WriteString(now.Format(time.RFC1123Z))
+	mimeBuffer.WriteString("\r\n")
+
+	mimeBuffer.WriteString("From: ")
+	mimeBuffer.WriteString(pm.from.String())
+	mimeBuffer.WriteString("\r\n")
+
+	mimeBuffer.WriteString("To: ")
+	for i, recipient := range pm.to {
+		if i > 0 {
+			mimeBuffer.WriteString(", ")
+		}
+		mimeBuffer.WriteString(recipient.String())
+	}
+	mimeBuffer.WriteString("\r\n")
+
+	mimeBuffer.WriteString("Subject: ")
+	mimeBuffer.WriteString(mime.QEncoding.Encode("utf-8", pm.Subject))
+	mimeBuffer.WriteString("\r\n")
+
+	messageID, err := messageID(pm.from.Address)
+	if err != nil {
+		return nil, err
+	}
+	mimeBuffer.WriteString("Message-ID: ")
+	mimeBuffer.WriteString(messageID)
+	mimeBuffer.WriteString("\r\n")
+
+	mimeBuffer.WriteString("MIME-Version: 1.0\r\n")
+	mimeBuffer.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
+	mimeBuffer.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
+	mimeBuffer.WriteString("\r\n")
+
+	htmlWriter := quotedprintable.NewWriter(mimeBuffer)
+	_, err = htmlWriter.Write([]byte(pm.HTMLBody))
+	if err != nil {
+		return nil, err
+	}
+
+	err = htmlWriter.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return mimeBuffer.Bytes(), nil
 }
 
 // messageID returns a random Message-ID in the sender's domain. Some spam
@@ -135,5 +272,25 @@ func messageID(from string) (string, error) {
 	// TODO(user): "<" + 16 random bytes (crypto/rand) as hex + "@" + the
 	// part of from after the last "@" + ">". Fall back to "cyclops.invalid"
 	// if from has no "@".
-	return "", errors.New("email: messageID not implemented")
+	var b strings.Builder
+	b.WriteString("<")
+	// Generate 16 random bytes
+	randomBytes := make([]byte, 16)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", err
+	}
+	// Convert to hex
+	b.WriteString(hex.EncodeToString(randomBytes))
+	b.WriteString("@")
+
+	atIndex := strings.LastIndex(from, "@")
+	if atIndex == -1 || atIndex == len(from)-1 {
+		b.WriteString("cyclops.invalid")
+	} else {
+		b.WriteString(from[atIndex+1:])
+	}
+	b.WriteString(">")
+
+	return b.String(), nil
 }

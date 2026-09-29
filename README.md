@@ -51,7 +51,8 @@ happening.
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation | Not started |
 | Email rendering (`internal/render`) | Done, tested |
-| Email sending: SES, SMTP (`internal/email`) | Tests written, implementation stubbed (`TODO(user)`) |
+| Email sending: SMTP (`internal/email`) | Address/message validation, `NewSMTP`, TLS config and MIME building done, tested; `Send` in progress |
+| Email sending: SES, env-based provider selection (`internal/email`) | Tests written, implementation stubbed (`TODO(user)`) |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
 | `CertReport` schema | Placeholder |
