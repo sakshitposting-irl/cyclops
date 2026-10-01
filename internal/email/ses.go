@@ -19,8 +19,15 @@ package email
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	// config loads credentials and region through the SDK's default chain.
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+
+	// sesv2 is the AWS SES API v2 client; its SendEmail call builds and sends the MIME message for us.
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 )
 
 // charsetUTF8 is declared on both subject and body, so non-ASCII text (e.g.
@@ -45,26 +52,65 @@ type sesAPI interface {
 
 // SES sends through Amazon SES (API v2).
 type SES struct {
+	// client is the real sesv2.Client in production and a fake in tests.
 	client sesAPI
 }
 
+// compile-time check that *SES satisfies Sender, so a signature drift fails the build, not a caller.
+
+// We try to assign a *SES to a Sender variable. If *SES doesn't implement Sender, this assignment fails and the compiler reports an error.
 var _ Sender = (*SES)(nil)
 
 // NewSES checks cfg and builds an SES client. Credentials are resolved on
 // the first Send, not here, so a missing role only shows up when mail is
 // actually sent.
 func NewSES(ctx context.Context, cfg SESConfig) (*SES, error) {
-	// TODO(user): require cfg.Region, then
-	// config.LoadDefaultConfig(ctx, config.WithRegion(cfg.Region)) and
-	// return &SES{client: sesv2.NewFromConfig(awsCfg)}.
-	return nil, errors.New("ses: NewSES not implemented")
+	// placeholder until implemented: fail loudly so a half-built sender can't silently drop mail.
+
+	if cfg.Region == "" {
+		return nil, errors.New("ses: NewSES requires cfg.Region")
+	}
+
+	// LoadDefaultConfig loads credentials and region through the SDK's default chain.
+
+	// config
+	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.Region))
+	if err != nil {
+		return nil, fmt.Errorf("ses: load AWS config: %w", err)
+	}
+
+	client := sesv2.NewFromConfig(awsCfg)
+	return &SES{client}, nil
 }
 
 // Send delivers msg with one SendEmail call; SES builds the MIME message.
 func (s *SES) Send(ctx context.Context, msg Message) error {
-	// TODO(user): parse(msg), then s.client.SendEmail with:
-	//   FromEmailAddress: from.String(); Destination.ToAddresses: each
-	//   to.String(); Content.Simple with Subject and Body.Html, both with
-	//   Charset charsetUTF8. Wrap a send error with %w.
-	return errors.New("ses: Send not implemented")
+	pm, err := parse(msg)
+	if err != nil {
+		return fmt.Errorf("ses: parse message: %w", err)
+	}
+
+	// addresses are bare (no display name); parse has already validated them
+	to := make([]string, len(pm.to))
+	for i, addr := range pm.to {
+		to[i] = addr.Address
+	}
+
+	_, err = s.client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: aws.String(pm.from.Address),
+		Destination:      &types.Destination{ToAddresses: to},
+		Content: &types.EmailContent{
+			Simple: &types.Message{
+				Subject: &types.Content{Data: aws.String(pm.Subject), Charset: aws.String(charsetUTF8)},
+				Body: &types.Body{
+					Html: &types.Content{Data: aws.String(pm.HTMLBody), Charset: aws.String(charsetUTF8)},
+				},
+			},
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("ses: send email: %w", err)
+	}
+	return nil
 }

@@ -46,10 +46,10 @@ func TestSESSend(t *testing.T) {
 	}
 
 	in := fake.in
-	if got := aws.ToString(in.FromEmailAddress); got != "<"+testFrom+">" {
+	if got := aws.ToString(in.FromEmailAddress); got != testFrom {
 		t.Errorf("From = %q", got)
 	}
-	if got := in.Destination.ToAddresses; !slices.Equal(got, []string{"<" + testTo + ">"}) {
+	if got := in.Destination.ToAddresses; !slices.Equal(got, []string{testTo}) {
 		t.Errorf("To = %q", got)
 	}
 	simple := in.Content.Simple
