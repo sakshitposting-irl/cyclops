@@ -39,6 +39,21 @@ works is described in [`../internals/`](../README.md#internals).
   request's condition, or the request's plus the Issuer's (needs read RBAC on
   Issuers/ClusterIssuers, revising ADR 0010).
 
+- `CertReport` schema (ADR 0018): the field-level questions left over from
+  the earlier ADRs, in [0018-certreport-schema.md](0018-certreport-schema.md).
+  Decided so far: the schedule default (UTC only), the exposed `CronJob`
+  settings, address validation in `parse` only (display names rejected),
+  namespace name validation, and the template ConfigMap living in the
+  cyclops namespace. Still open:
+  - how a bad cron schedule is reported;
+  - notifier list validation and identity;
+  - the template `key` and a template condition;
+  - printer columns;
+  - what `status` holds beyond the conditions (deferred with the
+    observability item).
+  The placeholder `TODO` in `certreport_types.go` still lists `thresholdDays`,
+  which ADR 0012 removed.
+
 - Packaging (ADR 0016): ship a Helm chart as the supported install path.
   ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
   project currently deploys with kubebuilder's kustomize `config/`, and
