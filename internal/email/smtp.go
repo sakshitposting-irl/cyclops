@@ -85,7 +85,7 @@ var _ Sender = (*SMTP)(nil)
 // NewSMTP checks cfg, fills in defaults, and returns a sender. Nothing is
 // dialled until Send.
 func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
-	//if SMTP Host eg( smtp.example.com) is empty, return an error
+	// if SMTP Host eg( smtp.example.com) is empty, return an error
 	if cfg.Host == "" {
 		return nil, errors.New("smtp: Host is required")
 	}
@@ -159,7 +159,7 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 	// Close the connection when we're done, even if we return early due to an error.
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// if ctx has a deadline, set it on the connection so that the SMTP client respects it. If setting the deadline fails, return the error
 	if deadline, ok := ctx.Deadline(); ok {
@@ -169,14 +169,14 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	}
 	// use context.AfterFunc to expire the connection's deadline when the context is cancelled, so that the SMTP client respects it. This is necessary because net/smtp does not support context cancellation or timeouts
 	stop := context.AfterFunc(ctx, func() {
-		conn.SetDeadline(time.Now())
+		_ = conn.SetDeadline(time.Now())
 	})
 	// defer the stop so that it is called when the function returns, even if we return early due to an error
 	defer stop()
 
 	// if TLS is implicit, wrap the connection in a TLS client and perform the handshake before creating the SMTP client. If the handshake fails, return the error
 
-	//NOTES: Refer TLS Handshake: https://docs.tlsref.org/server-side-tls.html
+	// NOTES: Refer TLS Handshake: https://docs.tlsref.org/server-side-tls.html
 	if s.cfg.TLS == TLSImplicit {
 		// wrap the TCP connection in a TLS client using the provided TLS configuration, and perform the handshake before creating the SMTP client. If the handshake fails, return the error
 		tlsConn := tls.Client(conn, s.tlsConfig())
@@ -191,7 +191,7 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	if err != nil {
 		return err
 	}
-	defer c.Quit()
+	defer func() { _ = c.Quit() }()
 
 	// only STARTTLS mode upgrades here: implicit TLS is already encrypted and None never is
 	if s.cfg.TLS == TLSStartTLS {

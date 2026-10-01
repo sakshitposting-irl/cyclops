@@ -344,8 +344,7 @@ a new ADR.
   in-process fake server with real TLS, and the SES sender against a fake client.
   - Done: `parse`/`parseAddress` (CR/LF rejection), `NewSMTP` (validation and port/TLS
     defaults), `tlsConfig`, `buildMIME`, `messageID`, `SMTP.Send` (all three TLS modes, AUTH,
-    deadline and cancellation) and the SES sender.
-  - Still `TODO(user)`: `FromEnv`.
+    deadline and cancellation), the SES sender and `FromEnv`.
 - **Custom templates** from a ConfigMap (ADR 0005), which needs the `CertReport` schema.
 - **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

@@ -19,6 +19,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"strconv"
 )
 
 // Environment variables the report Pod is configured with (ADR 0014). The
@@ -47,10 +48,26 @@ const (
 // FromEnv builds the configured Sender from environment variables, read
 // through getenv (os.Getenv in the report binary).
 func FromEnv(ctx context.Context, getenv func(string) string) (Sender, error) {
-	// TODO(user): switch on Provider(getenv(EnvProvider)):
-	//   - SMTP: build SMTPConfig from the CYCLOPS_SMTP_* variables (the port
-	//     is optional; a non-number is an error) and return NewSMTP(cfg).
-	//   - SES: return NewSES(ctx, SESConfig{Region: getenv(EnvSESRegion)}).
-	//   - unset or anything else: an error naming EnvProvider.
-	return nil, fmt.Errorf("%s: FromEnv not implemented", EnvProvider)
+	switch Provider(getenv(EnvProvider)) {
+	case ProviderSMTP:
+		cfg := SMTPConfig{
+			Host:     getenv(EnvSMTPHost),
+			TLS:      TLSMode(getenv(EnvSMTPTLS)),
+			Username: getenv(EnvSMTPUsername),
+			Password: getenv(EnvSMTPPassword),
+		}
+		// the port is optional: empty keeps 0 so NewSMTP applies its default
+		if rawPort := getenv(EnvSMTPPort); rawPort != "" {
+			port, err := strconv.Atoi(rawPort)
+			if err != nil {
+				return nil, fmt.Errorf("%s: invalid port %q: %w", EnvSMTPPort, rawPort, err)
+			}
+			cfg.Port = port
+		}
+		return NewSMTP(cfg)
+	case ProviderSES:
+		return NewSES(ctx, SESConfig{Region: getenv(EnvSESRegion)})
+	default:
+		return nil, fmt.Errorf("%s: must be %s or %s, got %q", EnvProvider, ProviderSES, ProviderSMTP, getenv(EnvProvider))
+	}
 }

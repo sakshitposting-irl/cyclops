@@ -53,7 +53,7 @@ happening.
 | Email rendering (`internal/render`) | Done, tested |
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client |
-| Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Tests written, implementation stubbed (`TODO(user)`) |
+| Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
 | `CertReport` schema | Placeholder |

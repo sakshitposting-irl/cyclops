@@ -223,7 +223,7 @@ func (f *fakeSMTP) serveOne() {
 			f.mailFrom = args
 			f.mu.Unlock()
 			f.reply(tp, verb, "250 ok")
-		case "RCPT":
+		case verbRcpt:
 			f.mu.Lock()
 			f.rcptTo = append(f.rcptTo, args)
 			f.mu.Unlock()

@@ -44,6 +44,7 @@ const (
 	verbEHLO     = "EHLO"
 	verbAuth     = "AUTH"
 	verbMail     = "MAIL"
+	verbRcpt     = "RCPT"
 	verbStartTLS = "STARTTLS"
 )
 
@@ -75,7 +76,7 @@ func TestSMTPStartTLSUpgradesBeforeAuth(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	want := []string{verbEHLO, verbStartTLS, verbEHLO, verbAuth, verbMail, "RCPT", "DATA", "QUIT"}
+	want := []string{verbEHLO, verbStartTLS, verbEHLO, verbAuth, verbMail, verbRcpt, "DATA", "QUIT"}
 	if got := f.session(); !slices.Equal(got, want) {
 		t.Errorf("commands = %v, want %v", got, want)
 	}
@@ -196,7 +197,7 @@ func TestSMTPServerRejects(t *testing.T) {
 	}{
 		{name: "after the message body", verb: dataEnd, reply: "554 5.7.1 spam detected", wantIn: "554"},
 		{name: "MAIL FROM", verb: "MAIL", reply: "550 5.7.1 sender not allowed", wantIn: "550"},
-		{name: "RCPT TO", verb: "RCPT", reply: "550 5.1.1 user unknown", wantIn: "550"},
+		{name: "RCPT TO", verb: verbRcpt, reply: "550 5.1.1 user unknown", wantIn: "550"},
 		{name: "wrong password", verb: "AUTH", reply: "535 5.7.8 bad credentials", creds: true, wantIn: "535"},
 	}
 	for _, tt := range tests {
