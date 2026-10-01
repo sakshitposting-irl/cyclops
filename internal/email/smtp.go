@@ -85,15 +85,6 @@ var _ Sender = (*SMTP)(nil)
 // NewSMTP checks cfg, fills in defaults, and returns a sender. Nothing is
 // dialled until Send.
 func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
-	// TODO(user): implement:
-	//   1. Host is required.
-	//   2. TLS defaults to TLSStartTLS; any value other than the three modes
-	//      is an error.
-	//   3. Port defaults from TLS (587 / 465 / 25) and must be 1-65535.
-	//   4. Username and Password must be set together, or both empty.
-	//   5. TLSNone with credentials is an error: they'd be sent in plaintext.
-	// Return &SMTP{cfg: cfg, now: time.Now} with the defaults filled in.
-
 	//if SMTP Host eg( smtp.example.com) is empty, return an error
 	if cfg.Host == "" {
 		return nil, errors.New("smtp: Host is required")
@@ -140,24 +131,6 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 
 // Send delivers msg in one SMTP session.
 func (s *SMTP) Send(ctx context.Context, msg Message) error {
-	// TODO(user): implement:
-	//   1. parse(msg) and buildMIME(pm, s.now()) before dialling, so a bad
-	//      message never opens a connection.
-	//   2. If ctx has no deadline, give it defaultTimeout.
-	//   3. Dial host:port with net.Dialer.DialContext. net/smtp takes no
-	//      context, so set ctx's deadline on the conn and use
-	//      context.AfterFunc to expire it when ctx is cancelled.
-	//   4. TLSImplicit: wrap the conn in tls.Client(conn, s.tlsConfig()) and
-	//      HandshakeContext before smtp.NewClient.
-	//   5. TLSStartTLS: if c.Extension("STARTTLS") is false, return
-	//      ErrStartTLSNotOffered (strict: never fall back to plaintext);
-	//      otherwise c.StartTLS(s.tlsConfig()).
-	//   6. With credentials: fail if the server doesn't offer AUTH, else
-	//      c.Auth(smtp.PlainAuth("", user, password, host)).
-	//   7. MAIL FROM, RCPT TO for every recipient (bare addresses), DATA,
-	//      write the MIME bytes, Close the writer (the server accepts or
-	//      rejects here), then Quit, ignoring its error.
-
 	// returning if message or MIME is invalid, before opening a connection to the SMTP server
 
 	pm, err := parse(msg)
@@ -266,9 +239,6 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 
 // tlsConfig is used for both implicit TLS and STARTTLS.
 func (s *SMTP) tlsConfig() *tls.Config {
-	// TODO(user): ServerName: s.cfg.Host, RootCAs: s.rootCAs, MinVersion:
-	// tls.VersionTLS12. Never InsecureSkipVerify (ADR 0014).
-
 	return &tls.Config{
 		ServerName: s.cfg.Host,
 		RootCAs:    s.rootCAs,
@@ -280,21 +250,6 @@ func (s *SMTP) tlsConfig() *tls.Config {
 // as quoted-printable, which keeps lines under SMTP's 998-byte limit however
 // long the template's lines are.
 func buildMIME(pm parsedMessage, now time.Time) ([]byte, error) {
-	// TODO(user): implement. Build the message in a bytes.Buffer, ending every
-	// line with "\r\n". Write these headers, one "Name: value" line each:
-	//   1. Date: now.Format(time.RFC1123Z)
-	//   2. From: pm.from.String()
-	//   3. To: every pm.to[i].String(), joined with ", "
-	//   4. Subject: mime.QEncoding.Encode("utf-8", pm.Subject)
-	//   5. Message-ID: messageID(pm.from.Address); return its error if it fails
-	//   6. MIME-Version: 1.0
-	//   7. Content-Type: text/html; charset="UTF-8"
-	//   8. Content-Transfer-Encoding: quoted-printable
-	// Then one empty line ("\r\n") to end the headers. Then write
-	// pm.HTMLBody through quotedprintable.NewWriter(&buf), and Close() that
-	// writer (checking its error) so the last bytes are flushed into buf.
-	// Return buf.Bytes().
-
 	mimeBuffer := &bytes.Buffer{}
 
 	mimeBuffer.WriteString("Date: ")
@@ -348,9 +303,6 @@ func buildMIME(pm parsedMessage, now time.Time) ([]byte, error) {
 // messageID returns a random Message-ID in the sender's domain. Some spam
 // filters penalise mail without one.
 func messageID(from string) (string, error) {
-	// TODO(user): "<" + 16 random bytes (crypto/rand) as hex + "@" + the
-	// part of from after the last "@" + ">". Fall back to "cyclops.invalid"
-	// if from has no "@".
 	var b strings.Builder
 	b.WriteString("<")
 	// Generate 16 random bytes
