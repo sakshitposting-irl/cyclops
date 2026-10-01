@@ -19,6 +19,7 @@ package email
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net"
 	"net/http/httptest"
 	"net/textproto"
@@ -38,8 +39,15 @@ type fakeSMTP struct {
 	implicitTLS   bool
 	offerStartTLS bool
 	offerAuth     bool
+	// rejects maps a verb (MAIL, RCPT, AUTH, or dataEnd) to the reply line
+	// sent instead of the success reply.
+	rejects map[string]string
+	// hangOn is a verb (or hangGreeting) after which the server goes silent
+	// until the client closes the connection.
+	hangOn string
 
 	mu       sync.Mutex
+	accepted bool     // a client connected
 	commands []string // verbs, in order: EHLO, STARTTLS, AUTH, ...
 	auth     string   // the AUTH line's arguments
 	mailFrom string
@@ -54,6 +62,38 @@ func withImplicitTLS() fakeOption { return func(f *fakeSMTP) { f.implicitTLS = t
 func withoutStartTLS() fakeOption { return func(f *fakeSMTP) { f.offerStartTLS = false } }
 func withoutAuth() fakeOption     { return func(f *fakeSMTP) { f.offerAuth = false } }
 func (f *fakeSMTP) port() int     { return f.ln.Addr().(*net.TCPAddr).Port }
+
+// dataEnd is the reject key for the reply to the end of the DATA payload.
+const dataEnd = "DATA-END"
+
+// hangGreeting makes the server accept the connection but never greet.
+const hangGreeting = "GREETING"
+
+// withReject makes the server answer verb with reply (e.g. "550 no such user").
+func withReject(verb, reply string) fakeOption {
+	return func(f *fakeSMTP) {
+		if f.rejects == nil {
+			f.rejects = map[string]string{}
+		}
+		f.rejects[verb] = reply
+	}
+}
+
+// withHang makes the server stop answering once it has seen verb.
+func withHang(verb string) fakeOption { return func(f *fakeSMTP) { f.hangOn = verb } }
+
+// reply sends the reject for verb if one is configured, else the success line.
+func (f *fakeSMTP) reply(tp *textproto.Conn, verb, ok string) {
+	if r, found := f.rejects[verb]; found {
+		_ = tp.PrintfLine("%s", r)
+		return
+	}
+	_ = tp.PrintfLine("%s", ok)
+}
+
+// hang blocks until the client closes the connection.
+func hang(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
+
 func (f *fakeSMTP) record(verb string) {
 	f.mu.Lock()
 	f.commands = append(f.commands, verb)
@@ -93,6 +133,16 @@ func newFakeSMTP(t *testing.T, opts ...fakeOption) *fakeSMTP {
 	return f
 }
 
+// wasContacted waits for the session to end and reports whether a client
+// ever connected. The listener is closed first so a never-used server ends.
+func (f *fakeSMTP) wasContacted() bool {
+	_ = f.ln.Close()
+	<-f.done
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepted
+}
+
 // session waits for the session to end and returns the verbs it saw.
 func (f *fakeSMTP) session() []string {
 	<-f.done
@@ -109,11 +159,18 @@ func (f *fakeSMTP) serveOne() {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	f.mu.Lock()
+	f.accepted = true
+	f.mu.Unlock()
 
 	tlsActive := false
 	if f.implicitTLS {
 		conn = tls.Server(conn, f.tlsConfig)
 		tlsActive = true
+	}
+	if f.hangOn == hangGreeting {
+		hang(conn)
+		return
 	}
 	tp := textproto.NewConn(conn)
 	_ = tp.PrintfLine("220 fake ESMTP")
@@ -126,6 +183,10 @@ func (f *fakeSMTP) serveOne() {
 		verb, args, _ := strings.Cut(line, " ")
 		verb = strings.ToUpper(verb)
 		f.record(verb)
+		if f.hangOn == verb {
+			hang(conn)
+			return
+		}
 
 		switch verb {
 		case verbEHLO:
@@ -156,17 +217,17 @@ func (f *fakeSMTP) serveOne() {
 			f.mu.Lock()
 			f.auth = args
 			f.mu.Unlock()
-			_ = tp.PrintfLine("235 ok")
+			f.reply(tp, verb, "235 ok")
 		case "MAIL":
 			f.mu.Lock()
 			f.mailFrom = args
 			f.mu.Unlock()
-			_ = tp.PrintfLine("250 ok")
+			f.reply(tp, verb, "250 ok")
 		case "RCPT":
 			f.mu.Lock()
 			f.rcptTo = append(f.rcptTo, args)
 			f.mu.Unlock()
-			_ = tp.PrintfLine("250 ok")
+			f.reply(tp, verb, "250 ok")
 		case "DATA":
 			_ = tp.PrintfLine("354 go ahead")
 			b, err := tp.ReadDotBytes()
@@ -176,7 +237,7 @@ func (f *fakeSMTP) serveOne() {
 			f.mu.Lock()
 			f.data = string(b)
 			f.mu.Unlock()
-			_ = tp.PrintfLine("250 queued")
+			f.reply(tp, dataEnd, "250 queued")
 		case "QUIT":
 			_ = tp.PrintfLine("221 bye")
 			return

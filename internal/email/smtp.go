@@ -27,6 +27,7 @@ import (
 	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/smtp"
 	"strconv"
 	"strings"
 	"time"
@@ -92,15 +93,27 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 	//   4. Username and Password must be set together, or both empty.
 	//   5. TLSNone with credentials is an error: they'd be sent in plaintext.
 	// Return &SMTP{cfg: cfg, now: time.Now} with the defaults filled in.
+
+	//if SMTP Host eg( smtp.example.com) is empty, return an error
 	if cfg.Host == "" {
 		return nil, errors.New("smtp: Host is required")
 	}
+
+	/*
+		NOTES;
+		TLSStartTLS: Connects in plaintext and upgrades with STARTTLS before anything else is sent. If the server doesn't offer STARTTLS, the send fails instead of continuing in plaintext.
+		TLSImplicit: Encrypted from the first byte (usually port 465).
+		TLSNone: Never encrypts. Only for unauthenticated relays inside the cluster; it can't be combined with credentials.
+	*/
+
+	// if TLS is empty, set it to TLSStartTLS. If it's not one of the three valid modes, return an error
 	if cfg.TLS == "" {
 		cfg.TLS = TLSStartTLS
 	}
 	if cfg.TLS != TLSStartTLS && cfg.TLS != TLSImplicit && cfg.TLS != TLSNone {
 		return nil, errors.New("smtp: TLS must be one of StartTLS, TLS, None")
 	}
+	// if Port is 0 (not specified), set it to the default for the TLS mode. If it's not in the range 1-65535, return an error
 	if cfg.Port == 0 {
 		switch cfg.TLS {
 		case TLSStartTLS:
@@ -113,9 +126,13 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 	} else if cfg.Port < 1 || cfg.Port > 65535 {
 		return nil, errors.New("smtp: Port must be 1-65535")
 	}
+
+	// check that Username and Password are either both set or both empty. If one is set and the other is not, return an error. Also, if TLS is TLSNone and credentials are provided, return an error
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return nil, errors.New("smtp: Username and Password must be set together or both empty")
 	}
+	// example: username = "user", password = "" => error
+	// example: username = "", password = "pass" => error
 	if (cfg.Username == "" && cfg.Password != "") || (cfg.Password == "" && cfg.Username != "") {
 		return nil, errors.New("smtp: Username and Password must be set together or both empty")
 	}
@@ -146,42 +163,110 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	//      write the MIME bytes, Close the writer (the server accepts or
 	//      rejects here), then Quit, ignoring its error.
 
+	// returning if message or MIME is invalid, before opening a connection to the SMTP server
+
 	pm, err := parse(msg)
 	if err != nil {
 		return err
 	}
-
-	mimeBytes, err := buildMIME(message, s.now())
+	mimeBytes, err := buildMIME(pm, s.now())
 	if err != nil {
 		return err
 	}
 
+	// if ctx has no deadline, give it defaultTimeout so that a server that stops answering can't hang the report Job forever
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
 		defer cancel()
 	}
 
+	// using net.Dialer to establish a connection to the SMTP server with the provided context, not using net.Dial because it does not support context cancellation or timeouts
 	dialer := &net.Dialer{}
 	dialer.Timeout = defaultTimeout
 
+	// using DialContext to establish a connection to the SMTP server with the provided context, not using Dial because it does not support context cancellation or timeouts
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port)))
 	if err != nil {
 		return err
 	}
+	// Close the connection when we're done, even if we return early due to an error.
 	defer conn.Close()
 
+	// if ctx has a deadline, set it on the connection so that the SMTP client respects it. If setting the deadline fails, return the error
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return err
 		}
 	}
+	// use context.AfterFunc to expire the connection's deadline when the context is cancelled, so that the SMTP client respects it. This is necessary because net/smtp does not support context cancellation or timeouts
 	stop := context.AfterFunc(ctx, func() {
 		conn.SetDeadline(time.Now())
 	})
+	// defer the stop so that it is called when the function returns, even if we return early due to an error
 	defer stop()
 
-	return errors.New("smtp: Send not implemented")
+	// if TLS is implicit, wrap the connection in a TLS client and perform the handshake before creating the SMTP client. If the handshake fails, return the error
+
+	//NOTES: Refer TLS Handshake: https://docs.tlsref.org/server-side-tls.html
+	if s.cfg.TLS == TLSImplicit {
+		// wrap the TCP connection in a TLS client using the provided TLS configuration, and perform the handshake before creating the SMTP client. If the handshake fails, return the error
+		tlsConn := tls.Client(conn, s.tlsConfig())
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return err
+		}
+		conn = tlsConn
+	}
+
+	// finally when the TLS handshake is done, create the SMTP client using the connection and the host. If creating the client fails, return the error. Defer quitting the client so that it is called when the function returns, even if we return early due to an error
+	c, err := smtp.NewClient(conn, s.cfg.Host)
+	if err != nil {
+		return err
+	}
+	defer c.Quit()
+
+	// only STARTTLS mode upgrades here: implicit TLS is already encrypted and None never is
+	if s.cfg.TLS == TLSStartTLS {
+		if ok, _ := c.Extension("STARTTLS"); !ok {
+			return ErrStartTLSNotOffered
+		}
+		if err := c.StartTLS(s.tlsConfig()); err != nil {
+			return err
+		}
+	}
+	// if the server offers AUTH, authenticate using the provided username and password. If authentication fails, return the error
+	if s.cfg.Username != "" {
+		if ok, _ := c.Extension("AUTH"); !ok {
+			return errors.New("smtp: server does not offer AUTH")
+		}
+		if err := c.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host)); err != nil {
+			return err
+		}
+	}
+	// send the MAIL FROM command with the sender's email address. If it fails, return the error
+	if err := c.Mail(pm.from.Address); err != nil {
+		return err
+	}
+	for _, to := range pm.to {
+		// send the RCPT TO command for each recipient's email address. If it fails, return the error
+		if err := c.Rcpt(to.Address); err != nil {
+			return err
+		}
+	}
+	// client.Data() returns a writer to which the message data can be written. If it fails, return the error
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	// write the MIME bytes to the SMTP client. If it fails, return the error
+	if _, err := w.Write(mimeBytes); err != nil {
+		return err
+	}
+	// close the writer to signal that we're done sending the message
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // tlsConfig is used for both implicit TLS and STARTTLS.
@@ -189,12 +274,11 @@ func (s *SMTP) tlsConfig() *tls.Config {
 	// TODO(user): ServerName: s.cfg.Host, RootCAs: s.rootCAs, MinVersion:
 	// tls.VersionTLS12. Never InsecureSkipVerify (ADR 0014).
 
-	t := &tls.Config{
+	return &tls.Config{
 		ServerName: s.cfg.Host,
 		RootCAs:    s.rootCAs,
 		MinVersion: tls.VersionTLS12,
 	}
-	return t
 }
 
 // buildMIME renders pm as a complete message: headers, then the HTML body

@@ -170,6 +170,108 @@ func TestSMTPCancelledContext(t *testing.T) {
 	}
 }
 
+func TestSMTPMultipleRecipients(t *testing.T) {
+	f := newFakeSMTP(t)
+	s := newTestSMTP(t, f, SMTPConfig{TLS: TLSStartTLS})
+	msg := testMessage()
+	msg.To = []string{testTo, "second@example.com", "Third Person <third@example.com>"}
+
+	if err := s.Send(context.Background(), msg); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	f.session()
+	want := []string{"TO:<" + testTo + ">", "TO:<second@example.com>", "TO:<third@example.com>"}
+	if !slices.Equal(f.rcptTo, want) {
+		t.Errorf("RCPT = %q, want bare addresses %q", f.rcptTo, want)
+	}
+}
+
+func TestSMTPServerRejects(t *testing.T) {
+	tests := []struct {
+		name   string
+		verb   string
+		reply  string
+		creds  bool
+		wantIn string
+	}{
+		{name: "after the message body", verb: dataEnd, reply: "554 5.7.1 spam detected", wantIn: "554"},
+		{name: "MAIL FROM", verb: "MAIL", reply: "550 5.7.1 sender not allowed", wantIn: "550"},
+		{name: "RCPT TO", verb: "RCPT", reply: "550 5.1.1 user unknown", wantIn: "550"},
+		{name: "wrong password", verb: "AUTH", reply: "535 5.7.8 bad credentials", creds: true, wantIn: "535"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeSMTP(t, withReject(tt.verb, tt.reply))
+			cfg := SMTPConfig{TLS: TLSStartTLS}
+			if tt.creds {
+				cfg.Username, cfg.Password = testUser, testPassword
+			}
+			s := newTestSMTP(t, f, cfg)
+
+			err := s.Send(context.Background(), testMessage())
+			if err == nil {
+				t.Fatal("Send succeeded although the server rejected it")
+			}
+			if !strings.Contains(err.Error(), tt.wantIn) {
+				t.Errorf("error %q should carry the server's %s reply", err, tt.wantIn)
+			}
+		})
+	}
+}
+
+func TestSMTPInvalidMessageNeverConnects(t *testing.T) {
+	f := newFakeSMTP(t)
+	s := newTestSMTP(t, f, SMTPConfig{TLS: TLSStartTLS})
+	msg := testMessage()
+	msg.Subject = "hi\r\nBcc: attacker@example.com"
+
+	if err := s.Send(context.Background(), msg); err == nil {
+		t.Fatal("Send accepted a header-injection subject")
+	}
+	if f.wasContacted() {
+		t.Error("a connection was opened for an invalid message")
+	}
+}
+
+func TestSMTPHungServerHitsDeadline(t *testing.T) {
+	for _, hangOn := range []string{hangGreeting, verbMail} {
+		t.Run(hangOn, func(t *testing.T) {
+			f := newFakeSMTP(t, withHang(hangOn))
+			s := newTestSMTP(t, f, SMTPConfig{TLS: TLSStartTLS})
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			start := time.Now()
+			err := s.Send(ctx, testMessage())
+			if err == nil {
+				t.Fatal("Send succeeded against a server that never answers")
+			}
+			if elapsed := time.Since(start); elapsed > 3*time.Second {
+				t.Errorf("Send took %v; the ctx deadline was ignored", elapsed)
+			}
+		})
+	}
+}
+
+func TestSMTPCancelMidSession(t *testing.T) {
+	f := newFakeSMTP(t, withHang(verbMail))
+	s := newTestSMTP(t, f, SMTPConfig{TLS: TLSStartTLS})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	start := time.Now()
+	err := s.Send(ctx, testMessage())
+	if err == nil {
+		t.Fatal("Send succeeded although the context was cancelled mid-session")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Send took %v after cancel; it should return promptly", elapsed)
+	}
+	if !slices.Contains(f.session(), verbMail) {
+		t.Error("expected the session to reach MAIL before the cancel")
+	}
+}
+
 func TestNewSMTP(t *testing.T) {
 	tests := []struct {
 		name     string
