@@ -131,11 +131,6 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return nil, errors.New("smtp: Username and Password must be set together or both empty")
 	}
-	// example: username = "user", password = "" => error
-	// example: username = "", password = "pass" => error
-	if (cfg.Username == "" && cfg.Password != "") || (cfg.Password == "" && cfg.Username != "") {
-		return nil, errors.New("smtp: Username and Password must be set together or both empty")
-	}
 	if cfg.TLS == TLSNone && cfg.Username != "" {
 		return nil, errors.New("smtp: TLSNone cannot be used with credentials")
 	}
