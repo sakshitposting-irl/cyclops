@@ -25,6 +25,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 13 | Template data: flat `TemplateData`/`Row` contract for all templates; additive changes only | [0013-template-data.md](0013-template-data.md) |
 | 14 | Email delivery: SES/SMTP settings set once per install (Helm values → ConfigMap); credentials in hand-made Secrets in the cyclops namespace, injected as env vars; SES ambient-first; strict STARTTLS; `CredentialsFound` condition (supersedes per-notifier provider in 8) | [0014-notifier-credentials.md](0014-notifier-credentials.md) |
 | 15 | Scheduled runs email only when something needs attention; each `CertReport` gets a one-time welcome email (policy + current findings), sent by a one-off Job, with state in a small owned ConfigMap | [0015-email-policy.md](0015-email-policy.md) |
+| 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
 
 ## Open / not yet decided
 
@@ -38,21 +39,6 @@ works is described in [`../internals/`](../README.md#internals).
   root cause (e.g. `ErrGetKeyPair`: CA Secret not found). Options: relay the
   request's condition, or the request's plus the Issuer's (needs read RBAC on
   Issuers/ClusterIssuers, revising ADR 0010).
-
-- `CertReport` schema (ADR 0018): the field-level questions left over from
-  the earlier ADRs, in [0018-certreport-schema.md](0018-certreport-schema.md).
-  Decided so far: the schedule default (UTC only), the exposed `CronJob`
-  settings, address validation in `parse` only (display names rejected),
-  namespace name validation, and the template ConfigMap living in the
-  cyclops namespace. Still open:
-  - how a bad cron schedule is reported;
-  - notifier list validation and identity;
-  - the template `key` and a template condition;
-  - printer columns;
-  - what `status` holds beyond the conditions (deferred with the
-    observability item).
-  The placeholder `TODO` in `certreport_types.go` still lists `thresholdDays`,
-  which ADR 0012 removed.
 
 - Packaging (ADR 0016): ship a Helm chart as the supported install path.
   ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
@@ -91,6 +77,8 @@ works is described in [`../internals/`](../README.md#internals).
   email is sent on healthy days, a failing report run also produces no
   email. Failed runs need to show up somewhere else, e.g. a condition on
   the `CertReport` driven by the Jobs it owns.
+  This also settles what `CertReport.status` holds beyond conditions (ADR 0018
+  question 8), and whether `kubectl get` gets a health column.
 
 ## Ground rules for this project
 

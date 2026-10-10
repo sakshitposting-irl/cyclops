@@ -27,6 +27,42 @@ import (
 // The happy path (manager actually starting) is covered by envtest in
 // internal/controller, so it's deliberately not duplicated here.
 
+// requiredFlags are the flags run insists on before it touches the cluster.
+var requiredFlags = []string{"--namespace=cyclops-system", "--report-image=cyclops:test"}
+
+func TestRun_RequiresNamespaceAndImage(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "")
+	tests := map[string]struct {
+		args []string
+		want string
+	}{
+		"no namespace":    {args: []string{"--report-image=cyclops:test"}, want: "--namespace"},
+		"no report image": {args: []string{"--namespace=cyclops-system"}, want: "--report-image"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := run(context.Background(), tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("run() error = %v, want it to mention %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRun_NamespaceDefaultsToPodNamespace(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "from-env")
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "does-not-exist"))
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+	// With the namespace coming from the environment, run gets past flag validation
+	// and fails later, on the missing kubeconfig.
+	err := run(context.Background(), []string{"--report-image=cyclops:test", "--webhook-port=-1", "--metrics-bind-address=0"})
+	if err == nil || !strings.Contains(err.Error(), "loading kubeconfig") {
+		t.Fatalf("run() error = %v, want it to get as far as loading kubeconfig", err)
+	}
+}
+
 func TestRun_RejectsUnknownFlag(t *testing.T) {
 	err := run(context.Background(), []string{"--no-such-flag"})
 	if err == nil {
@@ -44,7 +80,7 @@ func TestRun_FailsWithoutKubeconfig(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 
-	err := run(context.Background(), []string{"--webhook-port=-1", "--metrics-bind-address=0"})
+	err := run(context.Background(), append([]string{"--webhook-port=-1", "--metrics-bind-address=0"}, requiredFlags...))
 	if err == nil {
 		t.Fatal("expected error when no kubeconfig is available, got nil")
 	}

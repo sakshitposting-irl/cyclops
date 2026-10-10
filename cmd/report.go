@@ -1,0 +1,211 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	cyclopsv1alpha1 "github.com/sakshitposting-irl/cyclops/api/v1alpha1"
+	"github.com/sakshitposting-irl/cyclops/internal/certmanager"
+	"github.com/sakshitposting-irl/cyclops/internal/email"
+	"github.com/sakshitposting-irl/cyclops/internal/report"
+)
+
+// Report mode (ADR 0006). The CronJob's Pod runs this same binary as
+// `cyclops report --certreport=<name> --namespace=<ns> [--welcome]`. It is a one-shot: do the
+// work, exit. There is no manager, no leader election and no webhook here, and exiting
+// non-zero is how the Job (and so Kubernetes) learns the run failed.
+//
+// It is split in two so the interesting part can be tested without a cluster:
+//   - runReport does the process plumbing (flags, logger, client) and calls
+//   - generateReport, which takes its dependencies as arguments (a fake client and a fake
+//     sender factory in tests) and does the actual work.
+
+// errReportNotImplemented is returned by generateReport for the steps not written yet, so a
+// partly finished build fails loudly instead of looking like a successful run.
+var errReportNotImplemented = errors.New("report mode is not implemented yet")
+
+// reportOptions are the flags of `cyclops report`.
+type reportOptions struct {
+	// CertReportName is the CertReport this run is for (--certreport, required).
+	CertReportName string
+	// Namespace is the cyclops namespace, where a custom template ConfigMap lives
+	// (--namespace, required; the controller passes it).
+	Namespace string
+	// Welcome marks the one-off welcome run (--welcome, ADR 0015): send even when nothing
+	// needs attention, so a new CertReport proves delivery works.
+	Welcome bool
+}
+
+// parseReportFlags parses args (everything after the word "report") into its own FlagSet,
+// like run does, so tests can call it repeatedly with different args.
+func parseReportFlags(args []string) (reportOptions, error) {
+	flagSet := flag.NewFlagSet("report", flag.ContinueOnError)
+	var opts reportOptions
+	flagSet.StringVar(&opts.CertReportName, "certreport", "", "CertReport name (required)")
+	flagSet.StringVar(&opts.Namespace, "namespace", "", "Namespace where cyclops is installed (required)")
+	flagSet.BoolVar(&opts.Welcome, "welcome", false,
+		"Send even when nothing needs attention (one-off welcome run)")
+
+	if err := flagSet.Parse(args); err != nil {
+		return reportOptions{}, err
+	}
+	if flagSet.NArg() > 0 {
+		return reportOptions{}, fmt.Errorf("unexpected arguments: %v", flagSet.Args())
+	}
+	if opts.CertReportName == "" {
+		return reportOptions{}, errors.New("--certreport is required")
+	}
+	if opts.Namespace == "" {
+		return reportOptions{}, errors.New("--namespace is required")
+	}
+	return opts, nil
+}
+
+// senderFactory builds the email Sender. generateReport calls it only when it has something
+// to send, so a healthy day never touches the mail configuration (ADR 0015) and tests can
+// pass a fake.
+type senderFactory func(ctx context.Context) (email.Sender, error)
+
+// newReportScheme is the scheme report mode reads with: core types (the template ConfigMap),
+// the CertReport, and the cert-manager and ACME types certmanager.List reads. The manager's
+// scheme in main.go lacks the cert-manager types, hence a separate one.
+func newReportScheme() (*runtime.Scheme, error) {
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		cyclopsv1alpha1.AddToScheme,
+		cmapi.AddToScheme,
+		acmev1.AddToScheme,
+	} {
+		if err := add(s); err != nil {
+			return nil, fmt.Errorf("building scheme: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// runReport is the entry point for report mode. It returns an error on any failure so that
+// main() exits 1 and the Job is marked failed.
+func runReport(ctx context.Context, args []string) error {
+	opts, err := parseReportFlags(args)
+	if err != nil {
+		return err
+	}
+
+	// Install a real logger first (ctrl.Log itself is only a handle and prints nothing until
+	// SetLogger is called), then put one carrying this run's identity into the context so
+	// generateReport can log with ctrl.LoggerFrom(ctx).
+	ctrl.SetLogger(zap.New())
+	log := ctrl.Log.WithName("report").WithValues(
+		"certreport", opts.CertReportName, "namespace", opts.Namespace, "welcome", opts.Welcome)
+	ctx = ctrl.LoggerInto(ctx, log)
+
+	reportScheme, err := newReportScheme()
+	if err != nil {
+		return err
+	}
+	// GetConfig, not GetConfigOrDie: the latter calls os.Exit, which skips main's error
+	// handling. A plain client with no cache fits a one-shot that reads each thing once.
+	restConfig, err := ctrl.GetConfig()
+	if err != nil {
+		return fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	c, err := client.New(restConfig, client.Options{Scheme: reportScheme})
+	if err != nil {
+		return fmt.Errorf("creating client: %w", err)
+	}
+
+	// The Pod's mail settings come from env vars (ADR 0014); report mode reads nothing else.
+	newSender := func(ctx context.Context) (email.Sender, error) {
+		return email.FromEnv(ctx, os.Getenv)
+	}
+	return generateReport(ctx, c, newSender, opts, time.Now())
+}
+
+// generateReport is one report run. now is passed in so tests control the clock.
+//
+// TODO:
+//  1. Pick the template: the built-in render.Default, or if cr.Spec.EmailTemplateConfigMapRef
+//     is set, read that key from the ConfigMap in opts.Namespace and render.Parse it.
+//  2. render.NewTemplateData(cr.Name, now, findings) -> render.Render and render.Subject.
+//  3. sender, err := newSender(ctx), then for each notifier of type Email:
+//     sender.Send(ctx, email.Message{From, To, Subject, HTMLBody}). Keep going if one
+//     fails, and return all errors joined, so one bad recipient list does not silence the
+//     others.
+//
+// TODO(adr0015): render.TemplateData has no field yet to tell the template this is the
+// welcome run (policy text plus current findings). Adding one is additive (ADR 0013), but it
+// belongs to the welcome-email work.
+func generateReport(ctx context.Context, c client.Reader, _ senderFactory, opts reportOptions, now time.Time) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	// The CertReport is cluster-scoped, so the key is just its name. If it is gone the
+	// CronJob outlived it, which should not happen (the CertReport owns the CronJob), so fail
+	// the run loudly instead of exiting quietly.
+	var cr cyclopsv1alpha1.CertReport
+	if err := c.Get(ctx, client.ObjectKey{Name: opts.CertReportName}, &cr); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("CertReport %q not found: its CronJob should have been deleted with it", opts.CertReportName)
+		}
+		return fmt.Errorf("getting CertReport %q: %w", opts.CertReportName, err)
+	}
+	log.Info("loaded CertReport", "namespaces", cr.Spec.Namespaces, "notifiers", len(cr.Spec.Notifiers))
+
+	findings, err := findCertificates(ctx, c, cr.Spec.Namespaces, now)
+	if err != nil {
+		return err
+	}
+	log.Info("evaluated certificates", "findings", len(findings))
+
+	// ADR 0015: a healthy day sends nothing. Return before newSender is called, so a quiet
+	// day never touches the mail settings and cannot fail because of them. The welcome run
+	// is the exception: it sends even with no findings, to prove delivery works.
+	if len(findings) == 0 && !opts.Welcome {
+		log.Info("nothing to report")
+		return nil
+	}
+
+	return errReportNotImplemented
+}
+
+// findCertificates reads the certificates in namespaces (empty means all, ADR 0010) and
+// returns the ones that need attention as of now, most urgent first (ADR 0012). Failure
+// diagnostics are read as well, but they only decorate findings and never add one (ADR 0009).
+func findCertificates(
+	ctx context.Context, c client.Reader, namespaces []string, now time.Time,
+) ([]report.Finding, error) {
+	snap, err := certmanager.List(ctx, c, namespaces)
+	if err != nil {
+		return nil, fmt.Errorf("listing certificates: %w", err)
+	}
+	return report.Evaluate(snap.CertStatuses(), now), nil
+}

@@ -175,7 +175,7 @@ func TestSMTPMultipleRecipients(t *testing.T) {
 	f := newFakeSMTP(t)
 	s := newTestSMTP(t, f, SMTPConfig{TLS: TLSStartTLS})
 	msg := testMessage()
-	msg.To = []string{testTo, "second@example.com", "Third Person <third@example.com>"}
+	msg.To = []string{testTo, "second@example.com", "third@example.com"}
 
 	if err := s.Send(context.Background(), msg); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -317,7 +317,7 @@ func TestNewSMTP(t *testing.T) {
 
 func TestBuildMIME(t *testing.T) {
 	msg := testMessage()
-	msg.From = "Cyclops <" + testFrom + ">"
+	msg.From = testFrom
 	msg.To = []string{testTo, "oncall@example.com"}
 	msg.Subject = "Zertifikat läuft ab"
 	// Longer than SMTP's 998-byte line limit.

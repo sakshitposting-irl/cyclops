@@ -14,7 +14,17 @@ spec:
     singular: certreport
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspended
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CertReport is the Schema for the certreports API
@@ -38,6 +48,119 @@ spec:
             type: object
           spec:
             description: spec defines the desired state of CertReport
+            properties:
+              backoffLimit:
+                default: 0
+                description: |-
+                  backoffLimit is how many times a failed report Job is retried. Keep it low:
+                  a retried email Job can send the same email twice (ADR 0015).
+                format: int32
+                minimum: 0
+                type: integer
+              emailTemplateConfigMapRef:
+                description: |-
+                  emailTemplateConfigMapRef points at a ConfigMap holding a custom email
+                  template. Omitted means the built-in template.
+                properties:
+                  key:
+                    description: key within the ConfigMap that holds the template.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: name of the ConfigMap.
+                    minLength: 1
+                    type: string
+                required:
+                - key
+                - name
+                type: object
+              failedJobsHistoryLimit:
+                default: 1
+                description: failedJobsHistoryLimit is how many finished failed Jobs
+                  to keep.
+                format: int32
+                minimum: 0
+                type: integer
+              namespaces:
+                description: |-
+                  namespaces limits the report to Certificates in these namespaces. Omitted
+                  or empty means all namespaces.
+                items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  type: string
+                maxItems: 50
+                type: array
+                x-kubernetes-list-type: set
+              notifiers:
+                description: notifiers lists where the report is delivered.
+                items:
+                  description: Notifier is one delivery channel. Exactly the block
+                    named by type is set.
+                  properties:
+                    email:
+                      description: email configures an Email notifier.
+                      properties:
+                        from:
+                          description: from is the sender address.
+                          minLength: 1
+                          type: string
+                        to:
+                          description: to lists the recipient addresses.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - from
+                      - to
+                      type: object
+                    type:
+                      description: type selects the channel.
+                      enum:
+                      - Email
+                      type: string
+                  required:
+                  - type
+                  type: object
+                  x-kubernetes-validations:
+                  - message: the block named by type must be set, and no other
+                    rule: 'self.type == ''Email'' ? has(self.email) : !has(self.email)'
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+              schedule:
+                default: 0 8 * * *
+                description: |-
+                  schedule is a cron expression (UTC) for when the report runs. It is copied
+                  to the owned CronJob. The CRD only does a loose shape check; the API server
+                  has the final word, and a rejected schedule is reported through the
+                  ScheduleValid condition.
+                minLength: 1
+                pattern: ^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|\S+(\s+\S+){4})$
+                type: string
+              startingDeadlineSeconds:
+                default: 3600
+                description: |-
+                  startingDeadlineSeconds is how late (in seconds) a run may start after its
+                  scheduled time before it is skipped.
+                format: int64
+                minimum: 1
+                type: integer
+              successfulJobsHistoryLimit:
+                default: 3
+                description: successfulJobsHistoryLimit is how many finished successful
+                  Jobs to keep.
+                format: int32
+                minimum: 0
+                type: integer
+              suspend:
+                default: false
+                description: |-
+                  suspend pauses the report: the owned CronJob is created with suspend set
+                  and no further runs fire until it is cleared.
+                type: boolean
+            required:
+            - notifiers
             type: object
           status:
             description: status defines the observed state of CertReport

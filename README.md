@@ -12,9 +12,10 @@ cert-manager renews certificates automatically. cyclops is the backstop for when
 silently fails.
 
 > [!NOTE]
-> **Status: in development.** The core reporting logic is written and tested, but cyclops doesn't
-> send reports yet. Most of the design is decided. Webhook details, packaging and a few other
-> items are still open. See [Status](#status).
+> **Status: in development.** The controller creates and maintains the CronJob and reports its own
+> health in status conditions. The reporting logic is written and tested, but the report run isn't
+> finished, so cyclops doesn't send reports yet. Most of the design is decided. Webhook details,
+> packaging and a few other items are still open. See [Status](#status).
 
 ## How it works
 
@@ -41,6 +42,67 @@ For certificates that are due, the report also shows cert-manager's own diagnost
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
 happening.
 
+## Architecture
+
+### Components
+
+cyclops has two kinds of parts: objects stored in the Kubernetes API, which are data and run
+nothing, and Pods, which do the work.
+
+| Component | Kind | Role |
+|---|---|---|
+| `CertReport` | API object (CRD, cluster-scoped) | The user's configuration: schedule, namespaces, notifiers. Defined by the CRD. |
+| `CronJob` | API object | Holds the schedule and the report Pod template. Created and kept in sync by the controller, and owned by its `CertReport`. |
+| `Job` | API object | One per run, created from the CronJob by Kubernetes. Also used for the one-off welcome message. |
+| State `ConfigMap` | API object | `cyclops-state-<name>`: records whether the welcome message was sent. Owned by the `CertReport`. |
+| Controller | Pod (Deployment, always on) | Reconciles `CertReport`s into CronJobs, sets status conditions, and starts the welcome Job. Never reads certificates and never sends mail. |
+| Report Pod | Pod (one-shot, per run) | The same binary in report mode. Lists certificates, decides what to report, renders and sends the message, then exits. |
+
+One controller Pod serves any number of `CertReport`s. Each `CertReport` gets its own CronJob and
+state ConfigMap. Deleting a `CertReport` removes everything it owns through owner references, so
+no finalizers are needed.
+
+### Lifecycle
+
+**Install** (`make deploy`), in order:
+
+1. The CRD is registered with the API server.
+2. The `cyclops-system` namespace, the ServiceAccounts and the RBAC are created.
+3. The operator creates the mail ConfigMap and credentials Secret (see
+   [ADR 0014](docs/decisions/0014-notifier-credentials.md)). cert-manager must already be installed.
+4. The controller Deployment starts and begins watching `CertReport`s.
+
+**Runtime**, for each `CertReport`:
+
+1. A user creates the `CertReport`.
+2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
+   `NamespacesFound`, `CredentialsFound`, `TemplateValid`). If no welcome message has been sent, it
+   also creates a one-off welcome Job. (`TemplateValid` and the welcome Job are designed but not
+   built yet; see [Status](#status).)
+3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
+4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
+   the report if anything needs attention.
+5. The Pod exits. Kubernetes keeps finished Jobs according to the CronJob's history limits.
+
+### Identities and permissions
+
+The controller and the report Pod run under separate ServiceAccounts, so neither holds the other's
+privileges. The CR and the CronJob are data and hold no permissions of their own.
+
+| Actor | ServiceAccount | Access |
+|---|---|---|
+| Controller | `cyclops-controller-manager` | Read and write `CertReport`s and their status. Manage the CronJob, Jobs and state ConfigMap in `cyclops-system`. Read the Secrets, ConfigMaps and Namespaces it validates (the Namespace check is cluster-wide). Create Events. No access to certificates. |
+| Report Pod | `cyclops-report` | Read-only: `get`/`list` Certificates, CertificateRequests, Orders and Challenges; `get` its `CertReport`; `get` ConfigMaps in `cyclops-system` for a custom template. No write access. |
+| CronJob scheduling | Kubernetes' built-in CronJob controller | Creates Jobs from the CronJob. Nothing to configure. |
+
+The manager's role is generated from `+kubebuilder:rbac` markers. The report Pod's role is written
+by hand in [`config/rbac/report_*.yaml`](config/rbac), since the markers only describe the manager.
+
+Mail delivery is not governed by Kubernetes RBAC. The report Pod receives its SMTP credentials as
+environment variables from the install-level Secret, or uses an ambient AWS identity for SES (for
+example IRSA on the `cyclops-report` ServiceAccount). The controller never reads the mail password
+([ADR 0014](docs/decisions/0014-notifier-credentials.md)).
+
 ## Status
 
 | Piece | State |
@@ -49,14 +111,17 @@ happening.
 | Deciding which certificates to report (`internal/report`) | Done, tested |
 | Converting cert-manager objects (`internal/certmanager`) | Done, tested |
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
-| `CertReport` → `CronJob` reconciliation | Not started |
+| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound` |
+| `TemplateValid` condition | Not started |
+| Report mode (`cyclops report`, run by the CronJob's Pod) | In progress: loads the `CertReport`, lists and evaluates certificates, and exits quietly when there is nothing to report. Template, render and send are not written yet |
+| Report Pod RBAC (`config/rbac/report_*.yaml`) | Written, not yet tried on a cluster |
 | Email rendering (`internal/render`) | Done, tested |
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
-| `CertReport` schema | Placeholder |
+| `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 
 ## Documentation
 
@@ -75,8 +140,14 @@ and `golangci-lint` are downloaded into `bin/` automatically.
 make build        # build bin/manager
 make test         # unit tests (envtest)
 make lint         # golangci-lint
-make run          # run the controller against your current kubeconfig context
 make help         # list all targets
+```
+
+To run the controller from your host against your current kubeconfig context, pass the flags it
+requires (`make run` passes none, so it exits asking for them):
+
+```sh
+POD_NAMESPACE=cyclops-system go run ./cmd/main.go --report-image=<image> --leader-elect=false
 ```
 
 Cluster validation tests run the report pipeline against a real cluster using the fixtures in
@@ -105,6 +176,31 @@ make install                             # install the CRDs
 make deploy IMG=$IMG                     # deploy the controller
 kubectl apply -k config/samples/         # create a sample CertReport
 ```
+
+Before the first report can run:
+
+- **Mail settings.** Create the ConfigMap `cyclops-mail-config` in `cyclops-system` with the
+  non-secret settings, such as `CYCLOPS_EMAIL_PROVIDER` (`SMTP` or `SES`) and the host or region
+  (variable names are in [`internal/email/env.go`](internal/email/env.go)). The report Pod will not
+  start without this ConfigMap.
+- **Credentials (optional).** Create the Secret `cyclops-mail-credentials` in `cyclops-system` with
+  `username` and `password` (SMTP) or `access-key-id` and `secret-access-key` (SES). SES can use
+  IRSA or Pod Identity instead. See [ADR 0014](docs/decisions/0014-notifier-credentials.md). The
+  `CredentialsFound` condition on the `CertReport` shows whether the Secret is usable.
+- **Report image.** `make deploy IMG=...` rewrites the manager's `image:` but not its
+  `--report-image` argument in `config/manager/manager.yaml`. Edit that argument to the same image,
+  or the report Pods will run `controller:latest`.
+
+Check what the controller made:
+
+```sh
+kubectl get certreport,cronjob -A
+kubectl get certreport <name> -o jsonpath='{.status.conditions}'
+```
+
+> [!NOTE]
+> Report mode is unfinished, so a scheduled run currently exits with "report mode is not
+> implemented yet".
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 

@@ -6,4 +6,15 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: certreport-sample
 spec:
-  # TODO(user): Add fields here
+  backoffLimit: 0
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 1
+  startingDeadlineSeconds: 3600
+  schedule: "0 8 * * *"
+  suspend: false
+  namespaces: [prod, staging]
+  notifiers:
+    - type: Email
+      email:
+        from: cyclops@example.com
+        to: [platform@example.com]

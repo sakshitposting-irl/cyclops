@@ -21,7 +21,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -54,34 +56,127 @@ var _ = Describe("CertReport Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: cyclopsv1alpha1.CertReportSpec{
+						Notifiers: []cyclopsv1alpha1.Notifier{{
+							Type: cyclopsv1alpha1.NotifierTypeEmail,
+							Email: &cyclopsv1alpha1.EmailNotifier{
+								From: "cyclops@example.com",
+								To:   []string{testRecipient},
+							},
+						}},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &cyclopsv1alpha1.CertReport{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
+			// envtest runs no garbage collector, so the owned CronJob is not removed with the
+			// CertReport; each test deletes the CronJob it creates.
 			By("Cleanup the specific resource instance CertReport")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+
+		It("should create an owned CronJob and mark the schedule valid", func() {
 			controllerReconciler := &CertReportReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				Namespace:            cyclopsNamespace,
+				Image:                testImage,
+				ReportServiceAccount: testReportSA,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("creating the CronJob from the spec")
+			cj := &batchv1.CronJob{}
+			cjKey := types.NamespacedName{Name: cronJobName(resourceName), Namespace: cyclopsNamespace}
+			Expect(k8sClient.Get(ctx, cjKey, cj)).To(Succeed())
+			Expect(cj.Spec.Schedule).To(Equal("0 8 * * *"))
+			Expect(cj.Spec.ConcurrencyPolicy).To(Equal(batchv1.ForbidConcurrent))
+			pod := cj.Spec.JobTemplate.Spec.Template.Spec
+			Expect(pod.ServiceAccountName).To(Equal(testReportSA))
+			Expect(pod.Containers).To(HaveLen(1))
+			Expect(pod.Containers[0].Image).To(Equal(testImage))
+			Expect(pod.Containers[0].Args).To(Equal([]string{
+				"report", "--certreport=" + resourceName, "--namespace=" + cyclopsNamespace,
+			}))
+
+			By("owning it through the CertReport")
+			Expect(cj.OwnerReferences).To(HaveLen(1))
+			Expect(cj.OwnerReferences[0].Name).To(Equal(resourceName))
+
+			By("setting ScheduleValid=True")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, certreport)).To(Succeed())
+			cond := meta.FindStatusCondition(certreport.Status.Conditions, cyclopsv1alpha1.ConditionScheduleValid)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.ObservedGeneration).To(Equal(certreport.Generation))
+
+			Expect(k8sClient.Delete(ctx, cj)).To(Succeed())
+		})
+
+		// ADR 0018: the CRD only checks the shape of the schedule, so a five-field junk
+		// value gets through and the CronJob update is rejected by the API server. The old
+		// CronJob must keep running and ScheduleValid must carry the server's message.
+		It("should keep the old CronJob and set ScheduleValid=False when the schedule is rejected", func() {
+			controllerReconciler := &CertReportReconciler{
+				Client:               k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				Namespace:            cyclopsNamespace,
+				Image:                testImage,
+				ReportServiceAccount: testReportSA,
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			cjKey := types.NamespacedName{Name: cronJobName(resourceName), Namespace: cyclopsNamespace}
+
+			By("reconciling a valid schedule first")
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("editing the schedule to something the CRD accepts but cron does not")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, certreport)).To(Succeed())
+			certreport.Spec.Schedule = "99 99 99 99 99"
+			Expect(k8sClient.Update(ctx, certreport)).To(Succeed())
+
+			By("reconciling without an error, since retrying cannot fix a bad spec")
+			_, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("leaving the previous CronJob schedule in place")
+			cj := &batchv1.CronJob{}
+			Expect(k8sClient.Get(ctx, cjKey, cj)).To(Succeed())
+			Expect(cj.Spec.Schedule).To(Equal("0 8 * * *"))
+
+			By("setting ScheduleValid=False with the API server's message")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, certreport)).To(Succeed())
+			cond := meta.FindStatusCondition(certreport.Status.Conditions, cyclopsv1alpha1.ConditionScheduleValid)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("Rejected"))
+			Expect(cond.Message).To(ContainSubstring("schedule"))
+			Expect(cond.ObservedGeneration).To(Equal(certreport.Generation))
+
+			By("recovering once the schedule is fixed")
+			certreport.Spec.Schedule = "30 6 * * *"
+			Expect(k8sClient.Update(ctx, certreport)).To(Succeed())
+			_, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, cjKey, cj)).To(Succeed())
+			Expect(cj.Spec.Schedule).To(Equal("30 6 * * *"))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, certreport)).To(Succeed())
+			cond = meta.FindStatusCondition(certreport.Status.Conditions, cyclopsv1alpha1.ConditionScheduleValid)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+
+			Expect(k8sClient.Delete(ctx, cj)).To(Succeed())
 		})
 	})
 })

@@ -4,6 +4,7 @@
 Decided
 
 ## Context
+!note: check if CRD scope or CR scope is to be decided here
 A CRD's scope (Cluster vs Namespaced) is fixed at the CustomResourceDefinition
 level — it cannot be a per-instance switch. Two idiomatic ways exist to still
 get scope flexibility: a single cluster-scoped Kind with a spec field

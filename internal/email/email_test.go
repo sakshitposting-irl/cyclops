@@ -36,9 +36,17 @@ func TestParseAddress(t *testing.T) {
 		wantAddr string
 	}{
 		{name: "bare address", in: testFrom, wantAddr: testFrom},
-		{name: "angle brackets", in: "<" + testFrom + ">", wantAddr: testFrom},
-		{name: "display name", in: testNamedFrom, wantName: "Cyclops", wantAddr: testFrom},
-		{name: "quoted display name", in: `"Platform, Team" <` + testTo + ">", wantName: "Platform, Team", wantAddr: testTo},
+		{name: "plus tag", in: "cyclops+certs@example.com", wantAddr: "cyclops+certs@example.com"},
+		// A local part that merely looks like a name is still a bare address.
+		{name: "local part resembling a name", in: "cyclopsa@example.com", wantAddr: "cyclopsa@example.com"},
+		// Bare addresses only (ADR 0018 Q5): anything net/mail parses into more
+		// than just the address is rejected, so SES and SMTP can't treat it differently.
+		{name: "display name", in: testNamedFrom, wantErr: true},
+		{name: "display name without space", in: "Cyclops<" + testFrom + ">", wantErr: true},
+		{name: "quoted display name", in: `"Platform, Team" <` + testTo + ">", wantErr: true},
+		{name: "angle brackets only", in: "<" + testFrom + ">", wantErr: true},
+		{name: "trailing comment", in: testFrom + " (Cyclops)", wantErr: true},
+		{name: "surrounding space", in: " " + testFrom + " ", wantErr: true},
 		{name: "empty", in: "", wantErr: true},
 		{name: "no domain", in: "cyclops", wantErr: true},
 		{name: "spaces, no @", in: "cyclops at example dot com", wantErr: true},
@@ -79,8 +87,8 @@ func TestParseAddressErrorNamesInput(t *testing.T) {
 
 func TestParseValid(t *testing.T) {
 	msg := Message{
-		From:     testNamedFrom,
-		To:       []string{testTo, "On-call <" + testOncall + ">"},
+		From:     testFrom,
+		To:       []string{testTo, testOncall},
 		Subject:  testSubject,
 		HTMLBody: testBody,
 	}
@@ -90,15 +98,36 @@ func TestParseValid(t *testing.T) {
 		t.Fatalf("parse() error = %v", err)
 	}
 
-	if pm.from == nil || pm.from.Name != "Cyclops" || pm.from.Address != testFrom {
-		t.Errorf("from = %v, want Cyclops <%s>", pm.from, testFrom)
+	if pm.from == nil || pm.from.Name != "" || pm.from.Address != testFrom {
+		t.Errorf("from = %v, want bare %s", pm.from, testFrom)
 	}
-	if len(pm.to) != 2 || pm.to[0].Address != testTo || pm.to[1].Address != testOncall || pm.to[1].Name != "On-call" {
-		t.Errorf("to = %v, want %s and On-call <%s>, in order", pm.to, testTo, testOncall)
+	if len(pm.to) != 2 || pm.to[0].Address != testTo || pm.to[1].Address != testOncall {
+		t.Errorf("to = %v, want %s and %s, in order", pm.to, testTo, testOncall)
 	}
 	// The original message is carried through untouched.
 	if pm.Subject != testSubject || pm.HTMLBody != testBody || pm.From != msg.From {
 		t.Errorf("message fields changed: %+v", pm.Message)
+	}
+}
+
+func TestParseRejectsDisplayNames(t *testing.T) {
+	tests := map[string]Message{
+		"from":          {From: testNamedFrom, To: []string{testTo}},
+		"first to":      {From: testFrom, To: []string{"On-call <" + testOncall + ">"}},
+		"later to":      {From: testFrom, To: []string{testTo, "On-call <" + testOncall + ">"}},
+		"from, bracket": {From: "<" + testFrom + ">", To: []string{testTo}},
+	}
+	for name, msg := range tests {
+		t.Run(name, func(t *testing.T) {
+			msg.Subject, msg.HTMLBody = testSubject, testBody
+			_, err := parse(msg)
+			if err == nil {
+				t.Fatal("parse() accepted a display name")
+			}
+			if !strings.Contains(err.Error(), "display name") {
+				t.Errorf("error = %v, want it to say why", err)
+			}
+		})
 	}
 }
 

@@ -93,5 +93,8 @@ func parseAddress(s string) (*mail.Address, error) {
 	if err != nil {
 		return nil, fmt.Errorf("email: invalid address %q: %w", s, err)
 	}
+	if addr.Name != "" || addr.Address != s {
+		return nil, fmt.Errorf("email: address %q must be a bare address, not a display name", s)
+	}
 	return addr, nil
 }

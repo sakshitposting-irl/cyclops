@@ -1,12 +1,12 @@
 # 18. `CertReport` schema: spec fields, validation and status
 
 ## Status
-Partly decided. Questions 1, 3, 5, 6 and 7 are decided below (each has a
-**Decision** line); question 8 is deferred; questions 2, 4 and 9, and the
-template sub-questions under 7, are still open. Where an option in an open
-question is marked *(leaning)*, that's only a proposal. The "Already decided"
+Decided, except question 8 (`status` beyond conditions), which is deferred
+to the observability item. Every other question has a **Decision** line
+below. Where an option is marked *(leaning)* in a decided question, that was
+only the proposal; the Decision line is what counts. The "Already decided"
 section only collects what earlier ADRs settled; it doesn't reopen them.
-`api/v1alpha1/certreport_types.go` waits for the open ones.
+`api/v1alpha1/certreport_types.go` can now be written.
 
 ## Context
 `CertReportSpec` is still the kubebuilder placeholder, with a `TODO` listing
@@ -71,7 +71,14 @@ but isn't something a user can see.
   - Cons: same as B for time zones.
 
 ### 2. How is a bad schedule caught?
-**Open.** The API server validates the cron expression itself when the
+**Decision: option A.** The CRD does a loose check (non-empty, five
+fields or an `@` macro). The controller sets a new `ScheduleValid`
+condition carrying the API server's message when the `CronJob` create or
+update is rejected. If an edit is rejected, the previous `CronJob` keeps
+running its old schedule, and `ScheduleValid=False` is how that mismatch
+shows. The controller tests must cover this case.
+
+The API server validates the cron expression itself when the
 controller creates the `CronJob`, so option C is the floor. The remaining
 question is whether to add anything on top: only a status condition carrying
 the API server's message, or also a loose CRD check so obvious junk fails at
@@ -82,7 +89,7 @@ Cron syntax can't be written as a readable regex (ranges, steps, names,
 `@daily`).
 
 - **A. Loose CRD check (`MinLength`, five fields or an `@` macro), exact check
-  in the controller** *(leaning)*
+  in the controller** *(chosen)*
   - The controller sets a condition (a new `ScheduleValid`, or reuses
     `Available` with a reason) when the `CronJob` create or update fails.
   - Pros: obvious typos fail at `kubectl apply`; the API server's own parser
@@ -120,7 +127,15 @@ The controller sets everything else itself.
     (a retried email Job can send twice), so exposing them early is risky.
 
 ### 4. Validation of the notifier list
-**Open.**
+**Decision:** `type` is an enum (`Email` only for now), a CEL rule requires
+the block named by `type`, `minItems: 1`, and a plain atomic list with no
+`name` (option A). No webhook block until ADR 0017. An optional `name` can
+be added later without breaking anything.
+
+These rules check structure only. Address content stays with `parse` (Q5)
+and the welcome email (ADR 0015), which fails fast on a bad address or bad
+credentials. The structural rules still matter because a missing block or
+an empty list would make the welcome Job send nothing and exit 0.
 
 - **Discriminated union.** `type` is an enum (`Email`; `Webhook` joins with
   ADR 0017). A CEL rule checks that exactly the block named by `type` is set,
@@ -205,12 +220,15 @@ there's no namespace to infer.
   - Cons: needs `get`/`watch` on ConfigMaps cluster-wide, which widens RBAC
     for a convenience.
 
-Sub-questions, still open:
-- Is `key` required, or defaulted (for example to `template.html`)? Leaning:
-  required, so the reference is explicit.
-- Should the controller parse the template and set a condition (for example
-  `TemplateValid`) so a broken template shows up before 08:00? ADR 0005 says
-  the controller watches the ConfigMap; this is a small addition to that.
+Sub-questions, decided:
+- **`key` is required**, with no default, so the reference is explicit.
+- **The controller parses the template and sets a `TemplateValid`
+  condition**, re-checking when the CR or the ConfigMap changes. It is a
+  Go template syntax and missing-ConfigMap/key check only: an unknown field
+  name such as `{{ .Findngs }}` is not caught until the template runs. A
+  sample render could be added later if that proves a problem. This
+  matters because healthy days send no email (ADR 0015) and the welcome
+  Job doesn't re-test on ConfigMap edits.
 
 ### 8. What does `status` contain?
 **Deferred.** Not decided yet; to be planned together with the observability
@@ -237,11 +255,9 @@ types above.
 Leaning: A now, B when the observability item is decided.
 
 ### 9. Printer columns and short name
-**Open.**
-
-Small, but fixed once people script against `kubectl get`. Leaning: columns
-for `Schedule`, a suspended flag (if question 3 says B or C), the `Ready`-like
-summary condition, and `Age`. No short name.
+**Decision:** columns `Schedule`, `Suspended` and `Age`. No short name. A
+health/`Ready` column waits for the status/observability decision (question
+8); adding a column later breaks nobody.
 
 ## Illustrative shape (not confirmed)
 
@@ -266,10 +282,9 @@ spec:
 ```
 
 ## Next steps
-- Settle questions 2 and 4, the template sub-questions under 7, and 9;
-  question 8 comes with the observability item.
+- Write the types (`certreport_types.go`) and run `make manifests generate`.
 - Tighten `parse` to reject display names (question 5).
-- Then write the types.
+- Question 8 comes with the observability item.
 
 ## Consequences once decided
 - `make manifests generate` regenerates the CRD and DeepCopy code.
