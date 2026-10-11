@@ -341,16 +341,23 @@ func (r *CertReportReconciler) warnOnTransition(cr *cyclopsv1alpha1.CertReport, 
 // updateStatus applies the conditions and writes status once, and only if it changed, so
 // a reconcile does not trigger another reconcile. SetStatusCondition keeps
 // lastTransitionTime unless the condition's status flips.
+//
+// Status is written with a merge patch, not an update. An update sends back the
+// resourceVersion that was read, and the API server refuses it if the object has moved on.
+// cr comes from the manager's cache, which can lag a moment behind the API server, and our own
+// CronJob changes trigger a second reconcile within milliseconds, so such refusals happen.
+// A patch carries no resourceVersion, so a stale copy cannot make it fail. That is safe here
+// because this controller is the only writer of status.
 func (r *CertReportReconciler) updateStatus(ctx context.Context, cr *cyclopsv1alpha1.CertReport, conds ...metav1.Condition) error {
-	before := cr.Status.DeepCopy()
+	original := cr.DeepCopy()
 	for _, c := range conds {
 		c.ObservedGeneration = cr.Generation
 		meta.SetStatusCondition(&cr.Status.Conditions, c)
 	}
-	if equality.Semantic.DeepEqual(*before, cr.Status) {
+	if equality.Semantic.DeepEqual(original.Status, cr.Status) {
 		return nil
 	}
-	return r.Status().Update(ctx, cr)
+	return r.Status().Patch(ctx, cr, client.MergeFrom(original))
 }
 
 // maxCronJobNameLen is the longest CronJob name Kubernetes accepts: the controller

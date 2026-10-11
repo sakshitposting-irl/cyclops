@@ -123,6 +123,35 @@ var _ = Describe("CertReport Controller", func() {
 			Expect(k8sClient.Delete(ctx, cj)).To(Succeed())
 		})
 
+		// The controller reads from a cache that can lag behind the API server. A status write
+		// based on a stale copy must still succeed instead of failing with a version conflict.
+		It("writes status even when its copy of the CertReport is stale", func() {
+			controllerReconciler := &CertReportReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+			var stale cyclopsv1alpha1.CertReport
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &stale)).To(Succeed())
+
+			By("changing the object behind the stale copy's back")
+			var current cyclopsv1alpha1.CertReport
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &current)).To(Succeed())
+			current.Spec.Schedule = "30 6 * * *"
+			Expect(k8sClient.Update(ctx, &current)).To(Succeed())
+			Expect(current.ResourceVersion).NotTo(Equal(stale.ResourceVersion))
+
+			By("writing status from the stale copy")
+			Expect(controllerReconciler.updateStatus(ctx, &stale, metav1.Condition{
+				Type:    cyclopsv1alpha1.ConditionScheduleValid,
+				Status:  metav1.ConditionTrue,
+				Reason:  "Accepted",
+				Message: "test",
+			})).To(Succeed())
+
+			By("keeping the condition, and not reverting the newer spec")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, certreport)).To(Succeed())
+			Expect(meta.FindStatusCondition(certreport.Status.Conditions, cyclopsv1alpha1.ConditionScheduleValid)).NotTo(BeNil())
+			Expect(certreport.Spec.Schedule).To(Equal("30 6 * * *"))
+		})
+
 		// ADR 0018: the CRD only checks the shape of the schedule, so a five-field junk
 		// value gets through and the CronJob update is rejected by the API server. The old
 		// CronJob must keep running and ScheduleValid must carry the server's message.
