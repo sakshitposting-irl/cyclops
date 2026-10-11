@@ -21,11 +21,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html/template"
 	"os"
+	"strings"
 	"time"
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -36,6 +39,7 @@ import (
 	cyclopsv1alpha1 "github.com/sakshitposting-irl/cyclops/api/v1alpha1"
 	"github.com/sakshitposting-irl/cyclops/internal/certmanager"
 	"github.com/sakshitposting-irl/cyclops/internal/email"
+	"github.com/sakshitposting-irl/cyclops/internal/render"
 	"github.com/sakshitposting-irl/cyclops/internal/report"
 )
 
@@ -48,10 +52,6 @@ import (
 //   - runReport does the process plumbing (flags, logger, client) and calls
 //   - generateReport, which takes its dependencies as arguments (a fake client and a fake
 //     sender factory in tests) and does the actual work.
-
-// errReportNotImplemented is returned by generateReport for the steps not written yet, so a
-// partly finished build fails loudly instead of looking like a successful run.
-var errReportNotImplemented = errors.New("report mode is not implemented yet")
 
 // reportOptions are the flags of `cyclops report`.
 type reportOptions struct {
@@ -153,19 +153,22 @@ func runReport(ctx context.Context, args []string) error {
 
 // generateReport is one report run. now is passed in so tests control the clock.
 //
-// TODO:
-//  1. Pick the template: the built-in render.Default, or if cr.Spec.EmailTemplateConfigMapRef
-//     is set, read that key from the ConfigMap in opts.Namespace and render.Parse it.
-//  2. render.NewTemplateData(cr.Name, now, findings) -> render.Render and render.Subject.
-//  3. sender, err := newSender(ctx), then for each notifier of type Email:
-//     sender.Send(ctx, email.Message{From, To, Subject, HTMLBody}). Keep going if one
-//     fails, and return all errors joined, so one bad recipient list does not silence the
-//     others.
+// The steps, in order:
+//  1. Load the CertReport.
+//  2. List the certificates in scope and evaluate them into findings.
+//  3. Exit quietly if there are none, unless this is the welcome run (ADR 0015).
+//  4. Load the template and render the subject and body.
+//  5. Build the sender and deliver to every notifier.
+//
+// A failure at any step returns an error, so the Job fails and Kubernetes records the run as
+// failed.
 //
 // TODO(adr0015): render.TemplateData has no field yet to tell the template this is the
 // welcome run (policy text plus current findings). Adding one is additive (ADR 0013), but it
 // belongs to the welcome-email work.
-func generateReport(ctx context.Context, c client.Reader, _ senderFactory, opts reportOptions, now time.Time) error {
+func generateReport(
+	ctx context.Context, c client.Reader, newSender senderFactory, opts reportOptions, now time.Time,
+) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	// The CertReport is cluster-scoped, so the key is just its name. If it is gone the
@@ -194,7 +197,99 @@ func generateReport(ctx context.Context, c client.Reader, _ senderFactory, opts 
 		return nil
 	}
 
-	return errReportNotImplemented
+	// The template is loaded after the early exit, so a quiet day never reads the ConfigMap. A
+	// bad custom template fails the run here, before anything is sent.
+	tmpl, err := loadTemplate(ctx, c, &cr, opts.Namespace)
+	if err != nil {
+		return err
+	}
+	subject, body, err := renderReport(tmpl, cr.Name, now, findings)
+	if err != nil {
+		return err
+	}
+	log.Info("rendered report", "subject", subject, "bytes", len(body))
+
+	// Only now, with something to send, are the mail settings read. A factory failure is an
+	// error: there is a report and no way to deliver it.
+	sender, err := newSender(ctx)
+	if err != nil {
+		return fmt.Errorf("building the email sender: %w", err)
+	}
+	return sendToNotifiers(ctx, sender, cr.Spec.Notifiers, subject, body)
+}
+
+// sendToNotifiers delivers one rendered report to every notifier. It does not stop at the
+// first failure: one bad recipient list must not silence the others. All failures are
+// returned joined, so the Job fails and every cause is in its log. A notifier that is not
+// understood (a type added to the schema before this binary supports it) is an error too,
+// not a silent skip, so a report is never dropped without anyone knowing.
+func sendToNotifiers(
+	ctx context.Context, sender email.Sender, notifiers []cyclopsv1alpha1.Notifier, subject, body string,
+) error {
+	log := ctrl.LoggerFrom(ctx)
+	var errs []error
+	for i, n := range notifiers {
+		switch {
+		case n.Type == cyclopsv1alpha1.NotifierTypeEmail && n.Email != nil:
+			msg := email.Message{From: n.Email.From, To: n.Email.To, Subject: subject, HTMLBody: body}
+			if err := sender.Send(ctx, msg); err != nil {
+				errs = append(errs, fmt.Errorf("notifier %d (Email to %s): %w", i, strings.Join(n.Email.To, ", "), err))
+				continue
+			}
+			log.Info("report sent", "notifier", i, "to", n.Email.To)
+		case n.Type == cyclopsv1alpha1.NotifierTypeEmail:
+			errs = append(errs, fmt.Errorf("notifier %d: type Email has no email block", i))
+		default:
+			errs = append(errs, fmt.Errorf("notifier %d: unsupported type %q", i, n.Type))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// renderReport builds the email subject and HTML body for the findings. The subject is set
+// in code and the body comes from tmpl (ADR 0013). A template that fails to run, for example
+// one naming a field that does not exist, returns an error and no body, so a broken template
+// never sends half an email.
+func renderReport(
+	tmpl *template.Template, reportName string, now time.Time, findings []report.Finding,
+) (subject, body string, err error) {
+	data := render.NewTemplateData(reportName, now, findings)
+	body, err = render.Render(tmpl, data)
+	if err != nil {
+		return "", "", fmt.Errorf("rendering the report: %w", err)
+	}
+	return render.Subject(data), body, nil
+}
+
+// loadTemplate returns the email template for cr: the built-in one, or the custom one named
+// by spec.emailTemplateConfigMapRef, read from the ConfigMap of that name in namespace (the
+// cyclops namespace, ADR 0018). A missing ConfigMap, a missing key or a template that does
+// not parse is an error, so a broken custom template fails the run instead of sending
+// nothing or a half-rendered email (ADR 0005).
+func loadTemplate(
+	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, namespace string,
+) (*template.Template, error) {
+	ref := cr.Spec.EmailTemplateConfigMapRef
+	if ref == nil {
+		return render.Default, nil
+	}
+
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ref.Name}, &cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("template ConfigMap %s/%s not found", namespace, ref.Name)
+		}
+		return nil, fmt.Errorf("reading template ConfigMap %s/%s: %w", namespace, ref.Name, err)
+	}
+	text, ok := cm.Data[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("template ConfigMap %s/%s has no key %q", namespace, ref.Name, ref.Key)
+	}
+	tmpl, err := render.Parse(text)
+	if err != nil {
+		return nil, fmt.Errorf("parsing template %s/%s key %q: %w", namespace, ref.Name, ref.Key, err)
+	}
+	return tmpl, nil
 }
 
 // findCertificates reads the certificates in namespaces (empty means all, ADR 0010) and

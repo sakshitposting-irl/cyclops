@@ -25,12 +25,14 @@ import (
 	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cyclopsv1alpha1 "github.com/sakshitposting-irl/cyclops/api/v1alpha1"
 	"github.com/sakshitposting-irl/cyclops/internal/email"
+	"github.com/sakshitposting-irl/cyclops/internal/render"
 	"github.com/sakshitposting-irl/cyclops/internal/report"
 )
 
@@ -38,6 +40,10 @@ import (
 const (
 	testCyclopsNS  = "cyclops-system"
 	testReportName = "prod-certs"
+	testFrom       = "from@example.com"
+	tmplCM         = "tmpl"
+	keyGood        = "good"
+	keyBad         = "bad"
 )
 
 func TestGenerateReport_MissingCertReportIsAnError(t *testing.T) {
@@ -113,9 +119,38 @@ func TestFindCertificates(t *testing.T) {
 
 func kindName(f report.Finding) string { return string(f.Kind) }
 
-// reportFixture is a cluster with one healthy and (optionally) one expired certificate, a
-// CertReport named testReportName, and a sender factory that records whether it was called.
-func reportFixture(t *testing.T, withExpired bool) (c client.Reader, newSender senderFactory, called *bool) {
+// fakeSender records every message it is asked to send. fail, if set, can reject a message.
+type fakeSender struct {
+	sent []email.Message
+	fail func(email.Message) error
+}
+
+func (f *fakeSender) Send(_ context.Context, msg email.Message) error {
+	f.sent = append(f.sent, msg)
+	if f.fail != nil {
+		return f.fail(msg)
+	}
+	return nil
+}
+
+// emailNotifier is a CertReport notifier of type Email.
+func emailNotifier(to ...string) cyclopsv1alpha1.Notifier {
+	return cyclopsv1alpha1.Notifier{
+		Type:  cyclopsv1alpha1.NotifierTypeEmail,
+		Email: &cyclopsv1alpha1.EmailNotifier{From: testFrom, To: to},
+	}
+}
+
+// runFixture is a cluster with one healthy certificate, an optional expired one, and a
+// CertReport with the given notifiers. newSender hands out sender and counts its calls.
+type runFixture struct {
+	c          client.Reader
+	sender     *fakeSender
+	newSender  senderFactory
+	factoryHit int
+}
+
+func newRunFixture(t *testing.T, withExpired bool, notifiers ...cyclopsv1alpha1.Notifier) *runFixture {
 	t.Helper()
 	s, err := newReportScheme()
 	if err != nil {
@@ -125,50 +160,232 @@ func reportFixture(t *testing.T, withExpired bool) (c client.Reader, newSender s
 	healthy := now.Add(30 * 24 * time.Hour)
 	expired := now.Add(-24 * time.Hour)
 
-	objs := []client.Object{
-		&cyclopsv1alpha1.CertReport{ObjectMeta: metav1.ObjectMeta{Name: testReportName}},
-		certificate("a", "fine", &healthy),
+	cr := &cyclopsv1alpha1.CertReport{
+		ObjectMeta: metav1.ObjectMeta{Name: testReportName},
+		Spec:       cyclopsv1alpha1.CertReportSpec{Notifiers: notifiers},
 	}
+	objs := []client.Object{cr, certificate("a", "fine", &healthy)}
 	if withExpired {
-		objs = append(objs, certificate("a", "old", &expired))
+		objs = append(objs, certificate("a", "old-cert", &expired))
 	}
-	called = new(bool)
-	newSender = func(context.Context) (email.Sender, error) {
-		*called = true
-		return nil, errors.New("sender factory called")
+
+	f := &runFixture{
+		c:      fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build(),
+		sender: &fakeSender{},
 	}
-	return fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build(), newSender, called
+	f.newSender = func(context.Context) (email.Sender, error) {
+		f.factoryHit++
+		return f.sender, nil
+	}
+	return f
 }
 
-func TestGenerateReport_NothingToReport(t *testing.T) {
+func (f *runFixture) run(welcome bool) error {
 	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
-	opts := reportOptions{CertReportName: testReportName, Namespace: testCyclopsNS}
+	opts := reportOptions{CertReportName: testReportName, Namespace: testCyclopsNS, Welcome: welcome}
+	return generateReport(context.Background(), f.c, f.newSender, opts, now)
+}
 
-	t.Run("a healthy day exits cleanly without touching the mail settings", func(t *testing.T) {
-		c, newSender, called := reportFixture(t, false)
-		if err := generateReport(context.Background(), c, newSender, opts, now); err != nil {
-			t.Fatalf("generateReport() error = %v, want nil on a healthy day", err)
+func TestGenerateReport(t *testing.T) {
+	t.Run("a healthy day sends nothing and never builds the sender", func(t *testing.T) {
+		f := newRunFixture(t, false, emailNotifier("to@example.com"))
+		if err := f.run(false); err != nil {
+			t.Fatalf("generateReport() error = %v, want nil", err)
 		}
-		if *called {
-			t.Fatal("the sender factory was called on a healthy day (ADR 0015)")
-		}
-	})
-
-	t.Run("findings carry on past the early exit", func(t *testing.T) {
-		c, newSender, _ := reportFixture(t, true)
-		err := generateReport(context.Background(), c, newSender, opts, now)
-		if !errors.Is(err, errReportNotImplemented) {
-			t.Fatalf("generateReport() error = %v, want it to reach the not-yet-written rest", err)
+		if f.factoryHit != 0 || len(f.sender.sent) != 0 {
+			t.Fatalf("factory called %d times, %d messages sent; want none (ADR 0015)", f.factoryHit, len(f.sender.sent))
 		}
 	})
 
-	t.Run("the welcome run carries on even with no findings", func(t *testing.T) {
-		c, newSender, _ := reportFixture(t, false)
-		welcome := opts
-		welcome.Welcome = true
-		err := generateReport(context.Background(), c, newSender, welcome, now)
-		if !errors.Is(err, errReportNotImplemented) {
-			t.Fatalf("generateReport() error = %v, want it to reach the not-yet-written rest", err)
+	t.Run("findings are sent to the notifier", func(t *testing.T) {
+		f := newRunFixture(t, true, emailNotifier("a@example.com", "b@example.com"))
+		if err := f.run(false); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 {
+			t.Fatalf("sent %d messages, want 1", len(f.sender.sent))
+		}
+		msg := f.sender.sent[0]
+		if msg.From != testFrom || !slices.Equal(msg.To, []string{"a@example.com", "b@example.com"}) {
+			t.Fatalf("addressed %q -> %v", msg.From, msg.To)
+		}
+		if msg.Subject != "[cyclops] 1 certificate needs attention" || !strings.Contains(msg.HTMLBody, "old-cert") {
+			t.Fatalf("subject %q, body:\n%s", msg.Subject, msg.HTMLBody)
+		}
+	})
+
+	t.Run("the welcome run sends even with no findings", func(t *testing.T) {
+		f := newRunFixture(t, false, emailNotifier("to@example.com"))
+		if err := f.run(true); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 || f.sender.sent[0].Subject != "[cyclops] All certificates healthy" {
+			t.Fatalf("sent %+v, want one all-healthy message", f.sender.sent)
+		}
+	})
+
+	t.Run("one failing notifier does not stop the others, and the run fails", func(t *testing.T) {
+		f := newRunFixture(t, true,
+			emailNotifier("bad@example.com"),
+			emailNotifier("good@example.com"))
+		f.sender.fail = func(m email.Message) error {
+			if m.To[0] == "bad@example.com" {
+				return errors.New("mailbox unavailable")
+			}
+			return nil
+		}
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), "mailbox unavailable") ||
+			!strings.Contains(err.Error(), "bad@example.com") {
+			t.Fatalf("generateReport() error = %v, want it to name the failed notifier", err)
+		}
+		if len(f.sender.sent) != 2 {
+			t.Fatalf("tried %d notifiers, want both", len(f.sender.sent))
+		}
+	})
+
+	t.Run("every failure is reported, not just the first", func(t *testing.T) {
+		f := newRunFixture(t, true,
+			emailNotifier("one@example.com"),
+			emailNotifier("two@example.com"))
+		f.sender.fail = func(m email.Message) error { return errors.New("refused " + m.To[0]) }
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), "refused one@") || !strings.Contains(err.Error(), "refused two@") {
+			t.Fatalf("generateReport() error = %v, want both failures", err)
+		}
+	})
+
+	t.Run("a sender that cannot be built fails the run", func(t *testing.T) {
+		f := newRunFixture(t, true, emailNotifier("to@example.com"))
+		f.newSender = func(context.Context) (email.Sender, error) { return nil, errors.New("bad SMTP config") }
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), "bad SMTP config") {
+			t.Fatalf("generateReport() error = %v, want the factory error", err)
+		}
+	})
+
+	t.Run("an unsupported notifier type is an error, not a silent skip", func(t *testing.T) {
+		f := newRunFixture(t, true, cyclopsv1alpha1.Notifier{Type: "Webhook"})
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), `unsupported type "Webhook"`) {
+			t.Fatalf("generateReport() error = %v, want an unsupported-type error", err)
+		}
+		if len(f.sender.sent) != 0 {
+			t.Fatalf("sent %d messages, want none", len(f.sender.sent))
+		}
+	})
+}
+
+func TestLoadTemplate(t *testing.T) {
+	s, err := newReportScheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: tmplCM, Namespace: testCyclopsNS},
+		Data: map[string]string{
+			keyGood: "custom for {{ .ReportName }}",
+			keyBad:  "{{ .ReportName ",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cm).Build()
+
+	reportWith := func(name, key string) *cyclopsv1alpha1.CertReport {
+		cr := &cyclopsv1alpha1.CertReport{ObjectMeta: metav1.ObjectMeta{Name: testReportName}}
+		if name != "" {
+			cr.Spec.EmailTemplateConfigMapRef = &cyclopsv1alpha1.TemplateConfigMapRef{Name: name, Key: key}
+		}
+		return cr
+	}
+
+	t.Run("no reference uses the built-in template", func(t *testing.T) {
+		got, err := loadTemplate(context.Background(), c, reportWith("", ""), testCyclopsNS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != render.Default {
+			t.Fatal("want render.Default")
+		}
+	})
+
+	t.Run("a custom template is read from the ConfigMap and parsed", func(t *testing.T) {
+		got, err := loadTemplate(context.Background(), c, reportWith(tmplCM, keyGood), testCyclopsNS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := render.Render(got, render.TemplateData{ReportName: "prod"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "custom for prod" {
+			t.Fatalf("body = %q, want %q", body, "custom for prod")
+		}
+	})
+
+	errCases := map[string]struct {
+		name, key, namespace, want string
+	}{
+		"missing ConfigMap": {"nope", keyGood, testCyclopsNS, "not found"},
+		"missing key":       {tmplCM, "absent", testCyclopsNS, `no key "absent"`},
+		"template syntax":   {tmplCM, keyBad, testCyclopsNS, "parsing template"},
+		"other namespace":   {tmplCM, keyGood, "elsewhere", "not found"},
+	}
+	for name, tt := range errCases {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadTemplate(context.Background(), c, reportWith(tt.name, tt.key), tt.namespace)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("loadTemplate() error = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderReport(t *testing.T) {
+	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+	expired := now.Add(-24 * time.Hour)
+	findings := []report.Finding{{
+		Cert: report.CertStatus{Namespace: "a", Name: "old-cert", NotAfter: expired},
+		Kind: report.KindExpired,
+	}}
+
+	t.Run("the built-in template lists the findings", func(t *testing.T) {
+		subject, body, err := renderReport(render.Default, testReportName, now, findings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if subject != "[cyclops] 1 certificate needs attention" {
+			t.Fatalf("subject = %q", subject)
+		}
+		if !strings.Contains(body, "old-cert") {
+			t.Fatalf("body does not mention the certificate:\n%s", body)
+		}
+	})
+
+	t.Run("a custom template gets the report name and rows", func(t *testing.T) {
+		tmpl, err := render.Parse("{{ .ReportName }}: {{ range .Findings }}{{ .Namespace }}/{{ .Name }} {{ .Kind }}{{ end }}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, body, err := renderReport(tmpl, testReportName, now, findings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "prod-certs: a/old-cert Expired" {
+			t.Fatalf("body = %q", body)
+		}
+	})
+
+	t.Run("a template naming an unknown field fails with no body", func(t *testing.T) {
+		tmpl, err := render.Parse("{{ .Findngs }}")
+		if err != nil {
+			t.Fatal(err) // parses fine: the typo only shows up when it runs
+		}
+		subject, body, err := renderReport(tmpl, testReportName, now, findings)
+		if err == nil {
+			t.Fatal("want an error for the unknown field")
+		}
+		if subject != "" || body != "" {
+			t.Fatalf("got subject %q and body %q, want both empty on error", subject, body)
 		}
 	})
 }
