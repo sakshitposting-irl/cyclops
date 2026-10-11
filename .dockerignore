@@ -12,3 +12,6 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include files embedded into the binary with //go:embed
+!internal/render/default.html.tmpl
