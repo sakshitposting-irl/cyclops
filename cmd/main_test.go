@@ -27,8 +27,11 @@ import (
 // The happy path (manager actually starting) is covered by envtest in
 // internal/controller, so it's deliberately not duplicated here.
 
+// reportImageFlag is the --report-image flag run insists on, set to a test image.
+const reportImageFlag = "--report-image=cyclops:test"
+
 // requiredFlags are the flags run insists on before it touches the cluster.
-var requiredFlags = []string{"--namespace=cyclops-system", "--report-image=cyclops:test"}
+var requiredFlags = []string{"--namespace=cyclops-system", reportImageFlag}
 
 func TestRun_RequiresNamespaceAndImage(t *testing.T) {
 	t.Setenv("POD_NAMESPACE", "")
@@ -36,7 +39,7 @@ func TestRun_RequiresNamespaceAndImage(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no namespace":    {args: []string{"--report-image=cyclops:test"}, want: "--namespace"},
+		"no namespace":    {args: []string{reportImageFlag}, want: "--namespace"},
 		"no report image": {args: []string{"--namespace=cyclops-system"}, want: "--report-image"},
 	}
 	for name, tt := range tests {
@@ -57,7 +60,7 @@ func TestRun_NamespaceDefaultsToPodNamespace(t *testing.T) {
 
 	// With the namespace coming from the environment, run gets past flag validation
 	// and fails later, on the missing kubeconfig.
-	err := run(context.Background(), []string{"--report-image=cyclops:test", "--webhook-port=-1", "--metrics-bind-address=0"})
+	err := run(context.Background(), []string{reportImageFlag, "--webhook-port=-1", "--metrics-bind-address=0"})
 	if err == nil || !strings.Contains(err.Error(), "loading kubeconfig") {
 		t.Fatalf("run() error = %v, want it to get as far as loading kubeconfig", err)
 	}

@@ -123,8 +123,9 @@ func run(ctx context.Context, args []string) error {
 		"The image the report Pods run: the same image as this controller, started in report mode.")
 	fs.StringVar(&reportServiceAccount, "report-service-account", "cyclops-report",
 		"The ServiceAccount the report Pods run as.")
-	fs.StringVar(&credentialsSecret, "credentials-secret", "cyclops-mail-credentials",
-		"The Secret holding the mail credentials, injected into report Pods as env vars.")
+	fs.StringVar(&credentialsSecret, "credentials-secret", "",
+		"The Secret holding the mail credentials, injected into report Pods as env vars. "+
+			"Empty (the default) means none: SMTP without a login, or SES with ambient credentials such as IRSA.")
 	fs.StringVar(&mailConfigMap, "mail-config", "cyclops-mail-config",
 		"The ConfigMap holding the non-secret mail settings, injected into report Pods as env vars.")
 	opts := zap.Options{

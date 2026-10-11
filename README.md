@@ -13,9 +13,9 @@ silently fails.
 
 > [!NOTE]
 > **Status: in development.** The controller creates and maintains the CronJob and reports its own
-> health in status conditions. The reporting logic is written and tested, but the report run isn't
-> finished, so cyclops doesn't send reports yet. Most of the design is decided. Webhook details,
-> packaging and a few other items are still open. See [Status](#status).
+> health in status conditions, and the report run is written and unit-tested. It hasn't been run
+> on a real cluster yet, and the welcome message isn't built. Most of the design is decided.
+> Webhook details, packaging and a few other items are still open. See [Status](#status).
 
 ## How it works
 
@@ -113,7 +113,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound` |
 | `TemplateValid` condition | Not started |
-| Report mode (`cyclops report`, run by the CronJob's Pod) | In progress: loads the `CertReport`, lists and evaluates certificates, and exits quietly when there is nothing to report. Template, render and send are not written yet |
+| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested with a fake client and sender; not yet run on a cluster. Not yet handled: the `--welcome` message text |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Written, not yet tried on a cluster |
 | Email rendering (`internal/render`) | Done, tested |
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
@@ -183,10 +183,13 @@ Before the first report can run:
   non-secret settings, such as `CYCLOPS_EMAIL_PROVIDER` (`SMTP` or `SES`) and the host or region
   (variable names are in [`internal/email/env.go`](internal/email/env.go)). The report Pod will not
   start without this ConfigMap.
-- **Credentials (optional).** Create the Secret `cyclops-mail-credentials` in `cyclops-system` with
-  `username` and `password` (SMTP) or `access-key-id` and `secret-access-key` (SES). SES can use
-  IRSA or Pod Identity instead. See [ADR 0014](docs/decisions/0014-notifier-credentials.md). The
-  `CredentialsFound` condition on the `CertReport` shows whether the Secret is usable.
+- **Credentials (optional).** Needed only if your SMTP server wants a login or SES should use static
+  keys. Create a Secret in `cyclops-system` with `username` and `password` (SMTP) or
+  `access-key-id` and `secret-access-key` (SES), and name it in the manager's
+  `--credentials-secret` argument in `config/manager/manager.yaml`. Without that argument, no
+  credentials are used (an unauthenticated relay, or SES through IRSA or Pod Identity). See
+  [ADR 0014](docs/decisions/0014-notifier-credentials.md). When a Secret is named, the
+  `CredentialsFound` condition on the `CertReport` shows whether it is usable.
 - **Report image.** `make deploy IMG=...` rewrites the manager's `image:` but not its
   `--report-image` argument in `config/manager/manager.yaml`. Edit that argument to the same image,
   or the report Pods will run `controller:latest`.
@@ -199,8 +202,7 @@ kubectl get certreport <name> -o jsonpath='{.status.conditions}'
 ```
 
 > [!NOTE]
-> Report mode is unfinished, so a scheduled run currently exits with "report mode is not
-> implemented yet".
+> The full path has only been tested with fakes so far. Expect rough edges on a first real run.
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 
