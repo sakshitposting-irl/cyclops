@@ -31,7 +31,7 @@ import (
 const reportImageFlag = "--report-image=cyclops:test"
 
 // requiredFlags are the flags run insists on before it touches the cluster.
-var requiredFlags = []string{"--namespace=cyclops-system", reportImageFlag}
+var requiredFlags = []string{flagNamespace, reportImageFlag}
 
 func TestRun_RequiresNamespaceAndImage(t *testing.T) {
 	t.Setenv("POD_NAMESPACE", "")
@@ -40,7 +40,7 @@ func TestRun_RequiresNamespaceAndImage(t *testing.T) {
 		want string
 	}{
 		"no namespace":    {args: []string{reportImageFlag}, want: "--namespace"},
-		"no report image": {args: []string{"--namespace=cyclops-system"}, want: "--report-image"},
+		"no report image": {args: []string{flagNamespace}, want: "--report-image"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

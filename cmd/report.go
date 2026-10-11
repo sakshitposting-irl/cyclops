@@ -116,15 +116,18 @@ func newReportScheme() (*runtime.Scheme, error) {
 // runReport is the entry point for report mode. It returns an error on any failure so that
 // main() exits 1 and the Job is marked failed.
 func runReport(ctx context.Context, args []string) error {
+	// Install a real logger before anything can fail: ctrl.Log is only a handle and prints
+	// nothing until SetLogger is called, and main reports every returned error through it. Set
+	// after flag parsing, a missing --certreport would exit 1 with no message at all.
+	ctrl.SetLogger(zap.New())
+
 	opts, err := parseReportFlags(args)
 	if err != nil {
 		return err
 	}
 
-	// Install a real logger first (ctrl.Log itself is only a handle and prints nothing until
-	// SetLogger is called), then put one carrying this run's identity into the context so
-	// generateReport can log with ctrl.LoggerFrom(ctx).
-	ctrl.SetLogger(zap.New())
+	// Put a logger carrying this run's identity into the context, so generateReport can log
+	// with ctrl.LoggerFrom(ctx).
 	log := ctrl.Log.WithName("report").WithValues(
 		"certreport", opts.CertReportName, "namespace", opts.Namespace, "welcome", opts.Welcome)
 	ctx = ctrl.LoggerInto(ctx, log)

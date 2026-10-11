@@ -40,6 +40,9 @@ import (
 const (
 	testCyclopsNS  = "cyclops-system"
 	testReportName = "prod-certs"
+	testProd       = "prod"
+	flagNamespace  = "--namespace=cyclops-system"
+	flagCertReport = "--certreport=prod"
 	testFrom       = "from@example.com"
 	tmplCM         = "tmpl"
 	keyGood        = "good"
@@ -313,12 +316,12 @@ func TestLoadTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		body, err := render.Render(got, render.TemplateData{ReportName: "prod"})
+		body, err := render.Render(got, render.TemplateData{ReportName: testProd})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if body != "custom for prod" {
-			t.Fatalf("body = %q, want %q", body, "custom for prod")
+		if body != "custom for "+testProd {
+			t.Fatalf("body = %q, want %q", body, "custom for "+testProd)
 		}
 	})
 
@@ -388,4 +391,46 @@ func TestRenderReport(t *testing.T) {
 			t.Fatalf("got subject %q and body %q, want both empty on error", subject, body)
 		}
 	})
+}
+
+func TestParseReportFlags(t *testing.T) {
+	tests := map[string]struct {
+		args    []string
+		want    reportOptions
+		wantErr string
+	}{
+		"all flags": {
+			args: []string{flagCertReport, flagNamespace, "--welcome"},
+			want: reportOptions{CertReportName: testProd, Namespace: "cyclops-system", Welcome: true},
+		},
+		"welcome defaults to false": {
+			args: []string{flagCertReport, flagNamespace},
+			want: reportOptions{CertReportName: testProd, Namespace: "cyclops-system"},
+		},
+		"missing certreport": {args: []string{flagNamespace}, wantErr: "--certreport is required"},
+		"missing namespace":  {args: []string{flagCertReport}, wantErr: "--namespace is required"},
+		"no flags":           {args: nil, wantErr: "--certreport is required"},
+		"unknown flag":       {args: []string{"--bogus"}, wantErr: "bogus"},
+		"stray argument": {
+			args:    []string{flagCertReport, flagNamespace, "extra"},
+			wantErr: "unexpected arguments",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseReportFlags(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseReportFlags() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseReportFlags() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
 }
