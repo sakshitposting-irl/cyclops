@@ -1,0 +1,40 @@
+# A fake mail server for trying cyclops on a local kind cluster. MailHog accepts any SMTP
+# message and shows it in a web UI (port 8025), so nothing leaves the cluster.
+#
+# The ConfigMap is the install-level mail setting (ADR 0014) pointing cyclops at it:
+# unauthenticated, so TLS is "None" and no credentials Secret is needed.
+apiVersion: v1
+kind: Namespace
+metadata: {name: mailhog}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mailhog, namespace: mailhog}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mailhog}}
+  template:
+    metadata: {labels: {app: mailhog}}
+    spec:
+      containers:
+      - name: mailhog
+        image: mailhog/mailhog:v1.0.1
+        ports: [{containerPort: 1025}, {containerPort: 8025}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mailhog, namespace: mailhog}
+spec:
+  selector: {app: mailhog}
+  ports:
+  - {name: smtp, port: 1025}
+  - {name: http, port: 8025}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cyclops-mail-config, namespace: cyclops-system}
+data:
+  CYCLOPS_EMAIL_PROVIDER: SMTP
+  CYCLOPS_SMTP_HOST: mailhog.mailhog.svc.cluster.local
+  CYCLOPS_SMTP_PORT: "1025"
+  CYCLOPS_SMTP_TLS: "None"

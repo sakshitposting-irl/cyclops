@@ -2,20 +2,23 @@
 
 A Kubernetes controller that watches [cert-manager](https://cert-manager.io) `Certificate`
 resources and reports certificates that are expired, were never issued, or are overdue for renewal
-(past the renewal time cert-manager set for them). Reports go out by email (SES or SMTP) or
-webhook.
+(past the renewal time cert-manager set for them). Reports go out by email (SES or SMTP);
+webhook delivery is planned.
 
-cyclops only sends a report when something needs attention: a healthy cluster stays quiet. Each
-new report configuration gets a one-time welcome message that explains this.
+cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
+one-time welcome message per report configuration, to explain this and prove delivery works, is
+planned.
 
 cert-manager renews certificates automatically. cyclops is the backstop for when that renewal
 silently fails.
 
 > [!NOTE]
-> **Status: in development.** The controller creates and maintains the CronJob and reports its own
-> health in status conditions, and the report run is written and unit-tested. It hasn't been run
-> on a real cluster yet, and the welcome message isn't built. Most of the design is decided.
-> Webhook details, packaging and a few other items are still open. See [Status](#status).
+> **Status: alpha, in development.** The full path works on a local kind cluster with a fake mail
+> server: a `CertReport` becomes a CronJob, a run emails the certificates that need attention, and
+> a healthy run sends nothing. Not built yet: the welcome message, the webhook notifier, a Helm
+> chart and published image, and any signal when a report run itself fails. Real SMTP
+> authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status) and
+> [Try it on kind](#try-it-on-kind).
 
 ## How it works
 
@@ -26,7 +29,7 @@ flowchart LR
     CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
     JOB -->|lists| CM["cert-manager<br/>Certificates"]
     JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
-    JOB -->|sends| HOOK[Webhook]
+    JOB -.->|planned| HOOK[Webhook]
 ```
 
 1. You create a cluster-scoped `CertReport` describing the schedule, which namespaces to cover and who
@@ -34,13 +37,14 @@ flowchart LR
 2. The controller keeps a Kubernetes `CronJob` in sync with it.
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists every cert-manager
    `Certificate` and picks out the ones that need attention. If there are any, it sends the report
-   to each notifier (`Email` or `Webhook`). If there are none, it sends nothing.
-4. When a `CertReport` is first created, cyclops sends a one-time welcome message with the current
-   findings. This also checks that delivery works.
+   to each notifier (only `Email` exists today). If there are none, it sends nothing.
+4. Planned: when a `CertReport` is first created, cyclops sends a one-time welcome message with the
+   current findings. This also checks that delivery works.
 
 For certificates that are due, the report also shows cert-manager's own diagnostics (failed
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
-happening.
+happening. For now these come from ACME issuers only; a certificate from a CA, Vault or
+self-signed issuer is listed without a reason.
 
 ## Architecture
 
@@ -111,16 +115,18 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Deciding which certificates to report (`internal/report`) | Done, tested |
 | Converting cert-manager objects (`internal/certmanager`) | Done, tested |
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
-| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound` |
+| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound` |
 | `TemplateValid` condition | Not started |
-| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested with a fake client and sender; not yet run on a cluster. Not yet handled: the `--welcome` message text |
-| Report Pod RBAC (`config/rbac/report_*.yaml`) | Written, not yet tried on a cluster |
+| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. Not yet handled: the `--welcome` message text |
+| Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
 | Email rendering (`internal/render`) | Done, tested |
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
+| Signal when a report run fails | Not started: a failing run raises no email and no condition |
+| Helm chart and published image | Not started ([ADR 0016](docs/decisions/README.md)) |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 
 ## Documentation
@@ -147,7 +153,7 @@ To run the controller from your host against your current kubeconfig context, pa
 requires (`make run` passes none, so it exits asking for them):
 
 ```sh
-POD_NAMESPACE=cyclops-system go run ./cmd/main.go --report-image=<image> --leader-elect=false
+POD_NAMESPACE=cyclops-system go run ./cmd --report-image=<image> --leader-elect=false
 ```
 
 Cluster validation tests run the report pipeline against a real cluster using the fixtures in
@@ -165,6 +171,49 @@ DeepCopy code:
 ```sh
 make manifests generate
 ```
+
+## Try it on kind
+
+This runs the whole path on your machine with a fake mail server, so nothing is emailed for real.
+It needs Docker, `kind` and `kubectl`, and uses `test/cluster/testdata/fixtures.yaml`, which
+includes a certificate that can never be issued.
+
+```sh
+kind create cluster --name cyclops
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
+kubectl -n cert-manager wait --for=condition=Available deployment --all --timeout=240s
+
+docker build -t cyclops:dev . && kind load docker-image cyclops:dev --name cyclops
+# The image appears twice in the manifests (the Deployment and --report-image), so substitute both:
+make kustomize
+bin/kustomize build config/default | sed 's#controller:latest#cyclops:dev#g' | kubectl apply --server-side -f -
+
+kubectl apply -f hack/kind-mail.yaml                    # MailHog and the mail settings
+kubectl apply -f test/cluster/testdata/fixtures.yaml    # test certificates
+```
+
+Create a `CertReport` and trigger a run without waiting for its schedule:
+
+```sh
+kubectl apply -f - <<'EOF'
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata: {name: kind-test}
+spec:
+  namespaces: [cyclops-test-a, cyclops-test-b]
+  notifiers:
+    - type: Email
+      email: {from: cyclops@example.com, to: [platform@example.com]}
+EOF
+
+kubectl -n cyclops-system create job --from=cronjob/cyclops-kind-test manual-1
+kubectl -n cyclops-system logs job/manual-1
+kubectl -n mailhog port-forward svc/mailhog 8025:8025   # then open http://localhost:8025
+```
+
+The report lists `cyclops-test-b/broken` as never issued. Limit the `CertReport` to
+`cyclops-test-a` and run another Job to see a healthy run: it logs "nothing to report" and sends
+nothing. Remove everything with `kind delete cluster --name cyclops`.
 
 ## Deploying to a cluster
 
@@ -202,7 +251,8 @@ kubectl get certreport <name> -o jsonpath='{.status.conditions}'
 ```
 
 > [!NOTE]
-> The full path has only been tested with fakes so far. Expect rough edges on a first real run.
+> The path has been run end to end only on kind with an unauthenticated fake SMTP server. Real
+> SMTP authentication, STARTTLS and SES have only been tested with fakes, so expect rough edges.
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 
