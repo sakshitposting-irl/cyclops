@@ -17,8 +17,8 @@ silently fails.
 > server: a `CertReport` becomes a CronJob, a run emails the certificates that need attention, and
 > a healthy run sends nothing. Not built yet: the welcome message, the webhook notifier, a Helm
 > chart and published image, and any signal when a report run itself fails. Real SMTP
-> authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status) and
-> [Try it on kind](#try-it-on-kind).
+> authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status),
+> [Install the alpha](#install-the-alpha) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
 
@@ -172,6 +172,99 @@ DeepCopy code:
 make manifests generate
 ```
 
+## Install the alpha
+
+> [!WARNING]
+> `v0.1.0-alpha.1` is a first alpha, published for linux/amd64 only. It has no welcome message, no
+> webhook and no Helm chart, and nothing tells you when a report run itself fails (see
+> [Status](#status)). Try it on a non-production cluster first, or on kind with
+> [the section below](#try-it-on-kind).
+
+**Prerequisites:** a cluster with [cert-manager](https://cert-manager.io) installed, `kubectl`, and
+`git`.
+
+**1. Install cyclops.** The manifests live in this repository, so clone the release and apply them
+with the published image. The image appears twice in the manifests (the controller's `image:` and its
+`--report-image` argument), so substitute both:
+
+```sh
+git clone --branch v0.1.0-alpha.1 https://github.com/sakshitposting-irl/cyclops.git
+cd cyclops
+
+IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-alpha.1
+kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl apply --server-side -f -
+```
+
+This creates the `cyclops-system` namespace, the `CertReport` CRD, both ServiceAccounts with their
+RBAC, and the controller Deployment.
+
+**2. Tell cyclops how to send mail.** Create the ConfigMap `cyclops-mail-config` in
+`cyclops-system`. The report Pod will not start without it. For SMTP:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cyclops-mail-config, namespace: cyclops-system}
+data:
+  CYCLOPS_EMAIL_PROVIDER: SMTP
+  CYCLOPS_SMTP_HOST: smtp.example.com
+  CYCLOPS_SMTP_PORT: "587"
+  CYCLOPS_SMTP_TLS: StartTLS      # StartTLS (default), TLS, or None for an unauthenticated relay
+```
+
+For SES, set `CYCLOPS_EMAIL_PROVIDER: SES` and `CYCLOPS_SES_REGION`, and give the
+`cyclops-report` ServiceAccount an AWS identity (for example an IRSA annotation). The variable names
+are in [`internal/email/env.go`](internal/email/env.go).
+
+**3. Add credentials, only if you need them.** If your SMTP server wants a login (or SES should use
+static keys), create the Secret and tell the controller its name. Without this, no credentials are used:
+
+```sh
+kubectl -n cyclops-system create secret generic cyclops-mail-credentials \
+  --from-literal=username=<user> --from-literal=password=<password>      # SES: access-key-id, secret-access-key
+
+kubectl -n cyclops-system patch deployment cyclops-controller-manager --type json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--credentials-secret=cyclops-mail-credentials"}]'
+```
+
+See [ADR 0014](docs/decisions/0014-notifier-credentials.md) for the reasoning.
+
+**4. Create a `CertReport`.**
+
+```sh
+kubectl apply -f - <<'EOF'
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata: {name: cluster-certs}
+spec:
+  schedule: "0 8 * * *"             # UTC; this is the default
+  namespaces: []                    # empty means every namespace
+  notifiers:
+    - type: Email
+      email: {from: cyclops@example.com, to: [platform@example.com]}
+EOF
+```
+
+**5. Check it.**
+
+```sh
+kubectl get certreport,cronjob -A
+kubectl get certreport cluster-certs -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}'
+```
+
+`ScheduleValid`, `NamespacesFound` and `CredentialsFound` should all be `True`. To send a report now
+instead of waiting for 08:00, run the CronJob once and read its logs:
+
+```sh
+kubectl -n cyclops-system create job --from=cronjob/cyclops-cluster-certs first-run
+kubectl -n cyclops-system logs job/first-run
+```
+
+A healthy cluster logs "nothing to report" and sends no email. That is by design.
+
+**Uninstall:** `kubectl delete certreport --all`, then
+`kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl delete -f -`.
+
 ## Try it on kind
 
 This runs the whole path on your machine with a fake mail server, so nothing is emailed for real.
@@ -215,7 +308,9 @@ The report lists `cyclops-test-b/broken` as never issued. Limit the `CertReport`
 `cyclops-test-a` and run another Job to see a healthy run: it logs "nothing to report" and sends
 nothing. Remove everything with `kind delete cluster --name cyclops`.
 
-## Deploying to a cluster
+## Deploying your own build
+
+To run a build of your own instead of the published image:
 
 ```sh
 export IMG=<registry>/cyclops:<tag>
