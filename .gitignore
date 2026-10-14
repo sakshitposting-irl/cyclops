@@ -31,3 +31,6 @@ go.work
 
 # Local run output (e.g. make run > manager.log)
 *.log
+
+# Env: Token Holder
+.env
