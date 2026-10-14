@@ -80,13 +80,15 @@ no finalizers are needed.
 
 1. A user creates the `CertReport`.
 2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
-   `NamespacesFound`, `CredentialsFound`, `TemplateValid`). If no welcome message has been sent, it
+   `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
    also creates a one-off welcome Job. (`TemplateValid` and the welcome Job are designed but not
    built yet; see [Status](#status).)
 3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
 4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
    the report if anything needs attention.
 5. The Pod exits. Kubernetes keeps finished Jobs according to the CronJob's history limits.
+6. The controller reads the CronJob's status and sets `ReportSucceeding`, so a failed run is
+   visible on the `CertReport` ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)).
 
 ### Identities and permissions
 
@@ -115,7 +117,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Deciding which certificates to report (`internal/report`) | Done, tested |
 | Converting cert-manager objects (`internal/certmanager`) | Done, tested |
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
-| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound` |
+| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound`, `ReportSucceeding` |
 | `TemplateValid` condition | Not started |
 | Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. Not yet handled: the `--welcome` message text |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
@@ -125,7 +127,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
-| Signal when a report run fails | Not started: a failing run raises no email and no condition |
+| Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
 | Helm chart and published image | Not started ([ADR 0016](docs/decisions/README.md)) |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 
@@ -252,7 +254,8 @@ kubectl get certreport,cronjob -A
 kubectl get certreport cluster-certs -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}'
 ```
 
-`ScheduleValid`, `NamespacesFound` and `CredentialsFound` should all be `True`. To send a report now
+`ScheduleValid`, `NamespacesFound` and `CredentialsFound` should all be `True`.
+`ReportSucceeding` is `Unknown` (`NoRunsYet`) until the first scheduled run. To send a report now
 instead of waiting for 08:00, run the CronJob once and read its logs:
 
 ```sh
@@ -261,6 +264,27 @@ kubectl -n cyclops-system logs job/first-run
 ```
 
 A healthy cluster logs "nothing to report" and sends no email. That is by design.
+
+### When a report run fails
+
+A healthy day sends no email, so a broken report run would be silent too. To avoid that, the
+controller reads the owned CronJob's status and sets `ReportSucceeding` on the `CertReport`:
+`True` when the latest scheduled run succeeded, `False` (reason `LastRunFailed`, plus one Warning
+Event) when it failed, and `Unknown` while there has been no run yet or the CronJob is suspended.
+While a run is in progress the previous value is kept.
+
+![A good run, a broken mail host, and the fix](docs/assets/failed-run.gif)
+
+The recording is a real run on kind (`hack/demo-failed-run.sh`). The condition only says that a run
+failed. For the cause, read the Job's logs:
+
+```sh
+kubectl get certreport cluster-certs -o jsonpath='{.status.conditions[?(@.type=="ReportSucceeding")].message}'
+kubectl -n cyclops-system logs job/<failed-job>
+```
+
+Only scheduled runs count. A Job you create by hand with `kubectl create job --from=cronjob/...`
+does not change `ReportSucceeding`.
 
 **Uninstall:** `kubectl delete certreport --all`, then
 `kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl delete -f -`.
