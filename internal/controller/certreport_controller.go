@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -191,6 +192,11 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	r.warnOnTransition(&cr, nsCond)
 
+	// Step 4b: did the last scheduled run work? Read from the CronJob we just fetched, so no
+	// extra API call and no Job watch (ADR 0019).
+	report := reportCondition(cj, meta.FindStatusCondition(cr.Status.Conditions, cyclopsv1alpha1.ConditionReportSucceeding))
+	r.warnOnTransition(&cr, report)
+
 	// TODO(adr0018): TemplateValid: if emailTemplateConfigMapRef is set, load the
 	// ConfigMap key from the cyclops namespace and parse it with internal/render.
 	// TODO(adr0015): welcome email: if the state ConfigMap cyclops-state-<name> has no
@@ -202,7 +208,62 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// collected through their owner reference to the cluster-scoped CertReport.
 
 	// Step 5: one status write for all conditions.
-	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond)
+	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond, report)
+}
+
+// reportCondition turns the CronJob's own status into the ReportSucceeding condition (ADR
+// 0019). prev is the condition currently stored on the CertReport, or nil. Checked in order:
+//   - suspended: Unknown, "Suspended".
+//   - never scheduled: Unknown, "NoRunsYet".
+//   - a run is active: keep prev, so the old verdict does not flicker while it runs.
+//   - last success missing or older than the last schedule: False, "LastRunFailed".
+//   - otherwise: True, "LastRunSucceeded".
+//
+// Messages are stable text (CronJob timestamps, never time.Now()), or every reconcile would
+// write status.
+func reportCondition(cj *batchv1.CronJob, prev *metav1.Condition) metav1.Condition {
+	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionReportSucceeding}
+
+	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "Suspended"
+		cond.Message = "the CronJob is suspended"
+		return cond
+	}
+
+	if cj.Status.LastScheduleTime == nil {
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "NoRunsYet"
+		cond.Message = "no scheduled run has happened yet"
+		return cond
+	}
+
+	if len(cj.Status.Active) > 0 {
+		if prev != nil {
+			// Keep the previous condition while a run is active, so it does not flip back and
+			// forth while the run is still in progress.
+			return *prev
+		}
+		// Mostly unreachable, kept for completeness: the NoRunsYet condition is stored before
+		// the first run can become active, so prev is normally set by now.
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "RunInProgress"
+		cond.Message = "a scheduled run is currently active"
+		return cond
+	}
+
+	if cj.Status.LastSuccessfulTime == nil || cj.Status.LastSuccessfulTime.Before(cj.Status.LastScheduleTime) {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "LastRunFailed"
+		cond.Message = fmt.Sprintf("the last scheduled run at %s failed", cj.Status.LastScheduleTime.Format(time.RFC3339))
+		return cond
+	}
+
+	// Nothing above matched, so the latest scheduled run succeeded.
+	cond.Status = metav1.ConditionTrue
+	cond.Reason = "LastRunSucceeded"
+	cond.Message = fmt.Sprintf("the last scheduled run at %s succeeded", cj.Status.LastScheduleTime.Format(time.RFC3339))
+	return cond
 }
 
 // Fixed key names of the install-level credentials Secret (ADR 0014, decision 4). One

@@ -37,6 +37,9 @@ const (
 	// ConditionTemplateValid is False when the referenced template ConfigMap or
 	// key is missing, or the template fails to parse (ADR 0005).
 	ConditionTemplateValid = "TemplateValid"
+	// ConditionReportSucceeding is False when the last scheduled report run failed
+	// (ADR 0019). Driven by the owned CronJob's status, not by watching Jobs.
+	ConditionReportSucceeding = "ReportSucceeding"
 	// ConditionWelcomeSent is True once the welcome email Job has succeeded
 	// (ADR 0015).
 	ConditionWelcomeSent = "WelcomeSent"
