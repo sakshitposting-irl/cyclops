@@ -15,8 +15,8 @@ silently fails.
 > [!NOTE]
 > **Status: alpha, in development.** The full path works on a local kind cluster with a fake mail
 > server: a `CertReport` becomes a CronJob, a run emails the certificates that need attention, and
-> a healthy run sends nothing. Not built yet: the welcome message, the webhook notifier, a Helm
-> chart and published image, and any signal when a report run itself fails. Real SMTP
+> a healthy run sends nothing, and a failed run shows up on the `CertReport`. Not built yet: the
+> welcome message, the webhook notifier and a Helm chart. Real SMTP
 > authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status),
 > [Install the alpha](#install-the-alpha) and [Try it on kind](#try-it-on-kind).
 
@@ -177,10 +177,10 @@ make manifests generate
 ## Install the alpha
 
 > [!WARNING]
-> `v0.1.0-alpha.1` is a first alpha, published for linux/amd64 only. It has no welcome message, no
-> webhook and no Helm chart, and nothing tells you when a report run itself fails (see
-> [Status](#status)). Try it on a non-production cluster first, or on kind with
-> [the section below](#try-it-on-kind).
+> `v0.1.0-alpha.2` is an early alpha, published for linux/amd64 only. It has no welcome message, no
+> webhook and no Helm chart (see [Status](#status)). Unlike `v0.1.0-alpha.1`, it shows a failed
+> report run through the `ReportSucceeding` condition. Try it on a non-production cluster first, or
+> on kind with [the section below](#try-it-on-kind).
 
 **Prerequisites:** a cluster with [cert-manager](https://cert-manager.io) installed, `kubectl`, and
 `git`.
@@ -190,10 +190,10 @@ with the published image. The image appears twice in the manifests (the controll
 `--report-image` argument), so substitute both:
 
 ```sh
-git clone --branch v0.1.0-alpha.1 https://github.com/sakshitposting-irl/cyclops.git
+git clone --branch v0.1.0-alpha.2 https://github.com/sakshitposting-irl/cyclops.git
 cd cyclops
 
-IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-alpha.1
+IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-alpha.2
 kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl apply --server-side -f -
 ```
 
@@ -282,6 +282,9 @@ failed. For the cause, read the Job's logs:
 kubectl get certreport cluster-certs -o jsonpath='{.status.conditions[?(@.type=="ReportSucceeding")].message}'
 kubectl -n cyclops-system logs job/<failed-job>
 ```
+
+This is a plain status condition, so it works without Prometheus or any other monitoring stack.
+If you do run one, you can alert on the condition yourself; cyclops ships no alert rules.
 
 Only scheduled runs count. A Job you create by hand with `kubectl create job --from=cronjob/...`
 does not change `ReportSucceeding`.
