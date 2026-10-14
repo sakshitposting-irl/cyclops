@@ -1,7 +1,7 @@
 # 19. Failed report runs show up as a condition read from the CronJob
 
 ## Status
-Decided: the approach. Open: the TODOs below. Settles the "failed runs need to
+Decided. Settles the "failed runs need to
 show up somewhere" part of the Observability open item. Metrics, logging and
 a `kubectl get` health column are still open.
 
@@ -41,7 +41,7 @@ Option A. New condition `ReportSucceeding`:
 |---|---|---|
 | suspended | Unknown | `Suspended` |
 | never scheduled | Unknown | `NoRunsYet` |
-| a run is active | keep the previous value (Unknown if none) | `RunInProgress` |
+| a run is active | keep the previous value (Unknown if none) | previous reason, or `RunInProgress` |
 | last scheduled run newer than last success | False | `LastRunFailed` |
 | last success is the latest run | True | `LastRunSucceeded` |
 
@@ -50,8 +50,11 @@ False also emits a Warning Event, once per change (`warnOnTransition`).
 ## Consequences
 - The condition clears on the next scheduled success, not when someone fixes
   the cause.
-- TODO(you): is "keep the previous value while a run is active" the right call,
-  or should an active run show Unknown?
-- TODO(you): should the message point at the command to read the logs, e.g.
-  `kubectl -n cyclops-system logs job/<name>`? That needs the Job name, which
-  CronJob status does carry in `active` but not for finished runs.
+- While a run is active the previous value is kept, not replaced by Unknown.
+  Otherwise a failed run's False would vanish every time the next run starts
+  and anyone looking at that moment would think the problem was gone. The
+  `RunInProgress` reason is only used when nothing is stored yet, which is
+  rare: `NoRunsYet` is normally stored before the first run can be active.
+- The message does not tell the reader where to look. The README documents
+  reading the failed Job's logs, and a message naming a Job would go stale
+  once that Job is pruned by the history limit.

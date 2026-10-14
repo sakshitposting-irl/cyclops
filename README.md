@@ -309,6 +309,7 @@ make kustomize
 bin/kustomize build config/default | sed 's#controller:latest#cyclops:dev#g' | kubectl apply --server-side -f -
 
 kubectl apply -f hack/kind-mail.yaml                    # MailHog and the mail settings
+kubectl -n mailhog rollout status deploy/mailhog        # wait for it, or the first run cannot connect
 kubectl apply -f test/cluster/testdata/fixtures.yaml    # test certificates
 ```
 

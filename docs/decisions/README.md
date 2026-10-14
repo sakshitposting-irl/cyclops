@@ -26,7 +26,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 14 | Email delivery: SES/SMTP settings set once per install (Helm values → ConfigMap); credentials in hand-made Secrets in the cyclops namespace, injected as env vars; SES ambient-first; strict STARTTLS; `CredentialsFound` condition (supersedes per-notifier provider in 8) | [0014-notifier-credentials.md](0014-notifier-credentials.md) |
 | 15 | Scheduled runs email only when something needs attention; each `CertReport` gets a one-time welcome email (policy + current findings), sent by a one-off Job, with state in a small owned ConfigMap | [0015-email-policy.md](0015-email-policy.md) |
 | 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
-| 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch); details still TODO | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
+| 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch) | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
 
 ## Open / not yet decided
 

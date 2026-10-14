@@ -119,13 +119,12 @@ type CertReportReconciler struct {
 //
 // For the Reconcile contract, see
 // https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
-
 func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// The logger travels in the context, so log lines carry this reconcile's request details.
 	log := logf.FromContext(ctx)
 
-	// ADD comment explaining Get here is embededded in client.
-
+	// The reconciler embeds client.Client, so r.Get is that client's Get. For the kinds the
+	// manager caches it reads from the local cache, not the API server.
 	var cr cyclopsv1alpha1.CertReport
 	if err := r.Get(ctx, req.NamespacedName, &cr); err != nil {
 		// Already deleted: nothing to do, and its CronJob is garbage collected through the
