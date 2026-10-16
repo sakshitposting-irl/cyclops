@@ -95,7 +95,7 @@ func run(ctx context.Context, args []string) error {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
-	var namespace, reportImage, reportServiceAccount, credentialsSecret, mailConfigMap string
+	var namespace, reportImage, reportServiceAccount, credentialsSecret, mailConfigMap, defaultTemplateConfigMap string
 	fs := flag.NewFlagSet("cyclops", flag.ContinueOnError)
 	fs.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -128,6 +128,9 @@ func run(ctx context.Context, args []string) error {
 			"Empty (the default) means none: SMTP without a login, or SES with ambient credentials such as IRSA.")
 	fs.StringVar(&mailConfigMap, "mail-config", "cyclops-mail-config",
 		"The ConfigMap holding the non-secret mail settings, injected into report Pods as env vars.")
+	fs.StringVar(&defaultTemplateConfigMap, "default-template-configmap", "",
+		"ConfigMap (key template.html) used as the email template by every CertReport without its own "+
+			"emailTemplateConfigMapRef. Empty (the default) means the built-in template.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -258,6 +261,8 @@ func run(ctx context.Context, args []string) error {
 		ReportServiceAccount: reportServiceAccount,
 		CredentialsSecret:    credentialsSecret,
 		MailConfigMap:        mailConfigMap,
+
+		DefaultTemplateConfigMap: defaultTemplateConfigMap,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("creating certreport controller: %w", err)
 	}

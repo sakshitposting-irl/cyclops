@@ -128,7 +128,8 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart and published image | Not started ([ADR 0016](docs/decisions/README.md)) |
+| Helm chart | Started: `charts/cyclops` (unpublished; [ADR 0016](docs/decisions/README.md) still open) |
+| Published image | Done for `v0.1.0-alpha.2` (linux/amd64) |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 
 ## Documentation

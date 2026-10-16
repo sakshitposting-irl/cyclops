@@ -51,6 +51,15 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
+.PHONY: helm-crd
+helm-crd: manifests ## Copy the generated CRD into the Helm chart template.
+	hack/sync-helm-crd.sh
+
+.PHONY: helm-lint
+helm-lint: helm-crd ## Lint and render the Helm chart (needs helm).
+	helm lint charts/cyclops --set email.smtp.host=smtp.example.com
+	helm template cyclops charts/cyclops --set email.smtp.host=smtp.example.com >/dev/null
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...

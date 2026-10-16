@@ -1,0 +1,19 @@
+{{- /* Non-secret mail settings, injected into report Pods via envFrom (ADR 0014). */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cyclops.mailConfigMap" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+data:
+  CYCLOPS_EMAIL_PROVIDER: {{ .Values.email.provider | quote }}
+  {{- if eq .Values.email.provider "SMTP" }}
+  CYCLOPS_SMTP_HOST: {{ required "email.smtp.host is required when email.provider is SMTP" .Values.email.smtp.host | quote }}
+  CYCLOPS_SMTP_TLS: {{ .Values.email.smtp.tls | quote }}
+  {{- with .Values.email.smtp.port }}
+  CYCLOPS_SMTP_PORT: {{ . | quote }}
+  {{- end }}
+  {{- else }}
+  CYCLOPS_SES_REGION: {{ required "email.ses.region is required when email.provider is SES" .Values.email.ses.region | quote }}
+  {{- end }}

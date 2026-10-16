@@ -1,0 +1,254 @@
+{{- $fn := include "cyclops.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $group := "cyclops.sakshitposting-irl.github.io" }}
+# Controller: cluster-wide (ADR 0011, 0018). Mirrors config/rbac/role.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-manager-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports/finalizers"]
+    verbs: ["update"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports/status"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fn }}-manager-rolebinding
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fn }}-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.controllerServiceAccount" . }}
+    namespace: {{ $ns }}
+---
+# Controller: own namespace only (CronJobs, and the credentials Secret check of ADR 0014).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fn }}-manager-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fn }}-manager-namespaced-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fn }}-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.controllerServiceAccount" . }}
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fn }}-leader-election-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fn }}-leader-election-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fn }}-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.controllerServiceAccount" . }}
+    namespace: {{ $ns }}
+---
+# Report Pods: read-only (ADR 0010). No Secret or ConfigMap access beyond the template lookup.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-report-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "certificaterequests"]
+    verbs: ["get", "list"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders", "challenges"]
+    verbs: ["get", "list"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fn }}-report-rolebinding
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fn }}-report-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.reportServiceAccount" . }}
+    namespace: {{ $ns }}
+---
+# Custom email template lookup (ADR 0005), limited to the cyclops namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fn }}-report-template-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fn }}-report-template-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fn }}-report-template-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.reportServiceAccount" . }}
+    namespace: {{ $ns }}
+{{- if .Values.metrics.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-metrics-auth-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fn }}-metrics-auth-rolebinding
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fn }}-metrics-auth-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cyclops.controllerServiceAccount" . }}
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-metrics-reader
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+{{- end }}
+{{- if .Values.rbac.userRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-certreport-admin-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports"]
+    verbs: ["*"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-certreport-editor-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fn }}-certreport-viewer-role
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [{{ $group | quote }}]
+    resources: ["certreports/status"]
+    verbs: ["get"]
+{{- end }}

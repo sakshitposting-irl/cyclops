@@ -1,0 +1,12 @@
+cyclops {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+Mail delivery: {{ .Values.email.provider }}
+{{- with include "cyclops.credentialsSecret" . }}
+Credentials Secret: {{ . }} (create it in {{ $.Release.Namespace }} if it does not exist yet)
+{{- else }}
+No credentials Secret configured.
+{{- end }}
+
+Create a CertReport to start receiving reports:
+
+  kubectl get certreports

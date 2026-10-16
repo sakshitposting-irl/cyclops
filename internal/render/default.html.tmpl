@@ -1,3 +1,23 @@
+{{- /*
+  Cyclops email template. Go html/template: everything outside {{ }} is plain HTML you can
+  change freely. These comments produce no output.
+
+  NOTHING here is required. The whole file is the email body, sent as one text/html part, so
+  you may restructure, restyle or shorten it, or replace it entirely. What you cannot change:
+    - the subject line (set by cyclops), and
+    - the data available: only the fields below.
+
+  Available data (see the chart README for types and details):
+    .ReportName   .GeneratedAt   .Findings (may be empty; most urgent first)
+    each finding: .Kind .Namespace .Name .NotAfter .DaysLeft .RenewalTime
+                  .FailedIssuanceAttempts .State .Reason
+  .Kind is NeverIssued, Expired or RenewalOverdue. .NotAfter and .RenewalTime are zero when
+  unset: test with .IsZero. Referencing any other field fails the run and sends no email.
+
+  Email clients ignore <style> blocks and scripts, so keep styling inline (style="...").
+  Keep the empty-findings branch: ADR 0015 will use this template for the welcome email too,
+  and a day with no findings must still render.
+*/ -}}
 <!DOCTYPE html>
 <html>
 <head>
@@ -9,7 +29,7 @@
   <p style="margin: 0 0 20px; color: #59636e; font-size: 13px;">Generated {{ .GeneratedAt.Format "2006-01-02 15:04 UTC" }}</p>
 {{- end }}
 
-{{- if not .Findings }}
+{{- if not .Findings }}{{/* No findings: shown for an empty report. Reword freely. */}}
   <p>No certificates need attention. Every certificate is issued, unexpired, and not overdue for renewal.</p>
 {{- else }}
   <p>{{ len .Findings }} certificate{{ if ne (len .Findings) 1 }}s{{ end }} need{{ if eq (len .Findings) 1 }}s{{ end }} attention, most urgent first.</p>
@@ -22,7 +42,7 @@
       <th style="padding: 6px 12px 6px 0;">Failed attempts</th>
       <th style="padding: 6px 0;">cert-manager says</th>
     </tr>
-  {{- range .Findings }}
+  {{- range .Findings }}{{/* One row per finding: add, remove or reorder columns here and in the header row above. */}}
     <tr style="border-bottom: 1px solid #d1d9e0; vertical-align: top;">
       <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
         {{- if eq .Kind "NeverIssued" }}Never issued
@@ -52,6 +72,6 @@
   </table>
 {{- end }}
 
-  <p style="margin-top: 24px; color: #59636e; font-size: 12px;">Sent by <a href="https://github.com/sakshitposting-irl/cyclops" style="font-weight: bold; color: #800425;">Cyclops</a>. Certificates are listed when cert-manager has never issued them, they have expired, or their renewal is more than an hour overdue.</p>
+  <p style="margin-top: 24px; color: #59636e; font-size: 12px;">Sent by <a href="https://github.com/sakshitposting-irl/cyclops" style="font-weight: bold; color: #800425;">Cyclops</a>. Certificates are listed when cert-manager has never issued them, they have expired, or their renewal is more than an hour overdue.</p>{{/* Footer: explains why certificates are listed. Safe to edit or remove. */}}
 </body>
 </html>

@@ -78,6 +78,10 @@ type CertReportReconciler struct {
 	// itself never reads the password. The variable names are in internal/email/env.go.
 	CredentialsSecret string
 	MailConfigMap     string
+
+	// DefaultTemplateConfigMap, if set, is passed to the report Pod as the template for every
+	// CertReport that has no emailTemplateConfigMapRef of its own. Empty means the built-in one.
+	DefaultTemplateConfigMap string
 }
 
 // The report Pod runs as its own ServiceAccount with read-only access (ADR 0010). That
@@ -470,6 +474,9 @@ func (r *CertReportReconciler) mutateCronJob(cj *batchv1.CronJob, cr *cyclopsv1a
 	// The image entrypoint is the manager binary; the first argument selects report mode.
 	// --namespace tells report mode where a custom template ConfigMap lives.
 	c.Args = []string{"report", "--certreport=" + cr.Name, "--namespace=" + r.Namespace}
+	if r.DefaultTemplateConfigMap != "" {
+		c.Args = append(c.Args, "--default-template-configmap="+r.DefaultTemplateConfigMap)
+	}
 	c.EnvFrom = r.mailEnvFrom()
 	c.Env = r.mailEnv()
 

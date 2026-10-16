@@ -289,6 +289,8 @@ func TestLoadTemplate(t *testing.T) {
 		Data: map[string]string{
 			keyGood: "custom for {{ .ReportName }}",
 			keyBad:  "{{ .ReportName ",
+			// the chart-wide default (--default-template-configmap) is read from this key
+			defaultTemplateKey: "default for {{ .ReportName }}",
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cm).Build()
@@ -302,7 +304,7 @@ func TestLoadTemplate(t *testing.T) {
 	}
 
 	t.Run("no reference uses the built-in template", func(t *testing.T) {
-		got, err := loadTemplate(context.Background(), c, reportWith("", ""), testCyclopsNS)
+		got, err := loadTemplate(context.Background(), c, reportWith("", ""), testCyclopsNS, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,7 +314,7 @@ func TestLoadTemplate(t *testing.T) {
 	})
 
 	t.Run("a custom template is read from the ConfigMap and parsed", func(t *testing.T) {
-		got, err := loadTemplate(context.Background(), c, reportWith(tmplCM, keyGood), testCyclopsNS)
+		got, err := loadTemplate(context.Background(), c, reportWith(tmplCM, keyGood), testCyclopsNS, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -322,6 +324,38 @@ func TestLoadTemplate(t *testing.T) {
 		}
 		if body != "custom for "+testProd {
 			t.Fatalf("body = %q, want %q", body, "custom for "+testProd)
+		}
+	})
+
+	t.Run("the chart-wide default applies when the CertReport has no reference", func(t *testing.T) {
+		got, err := loadTemplate(context.Background(), c, reportWith("", ""), testCyclopsNS, tmplCM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := render.Render(got, render.TemplateData{ReportName: testProd})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "default for "+testProd {
+			t.Fatalf("body = %q, want %q", body, "default for "+testProd)
+		}
+	})
+
+	t.Run("a CertReport's own reference beats the chart-wide default", func(t *testing.T) {
+		got, err := loadTemplate(context.Background(), c, reportWith(tmplCM, keyGood), testCyclopsNS, tmplCM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := render.Render(got, render.TemplateData{ReportName: testProd})
+		if body != "custom for "+testProd {
+			t.Fatalf("body = %q, want %q", body, "custom for "+testProd)
+		}
+	})
+
+	t.Run("a missing chart-wide default ConfigMap fails the run", func(t *testing.T) {
+		_, err := loadTemplate(context.Background(), c, reportWith("", ""), testCyclopsNS, "nope")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("loadTemplate() error = %v, want not found", err)
 		}
 	})
 
@@ -335,7 +369,7 @@ func TestLoadTemplate(t *testing.T) {
 	}
 	for name, tt := range errCases {
 		t.Run(name, func(t *testing.T) {
-			_, err := loadTemplate(context.Background(), c, reportWith(tt.name, tt.key), tt.namespace)
+			_, err := loadTemplate(context.Background(), c, reportWith(tt.name, tt.key), tt.namespace, "")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("loadTemplate() error = %v, want it to contain %q", err, tt.want)
 			}

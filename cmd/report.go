@@ -63,7 +63,16 @@ type reportOptions struct {
 	// Welcome marks the one-off welcome run (--welcome, ADR 0015): send even when nothing
 	// needs attention, so a new CertReport proves delivery works.
 	Welcome bool
+	// DefaultTemplateConfigMap names a ConfigMap (key defaultTemplateKey) in Namespace used for
+	// every CertReport that sets no emailTemplateConfigMapRef (--default-template-configmap;
+	// the controller passes it, from the chart's emailTemplate.useAsDefault). Empty means the
+	// built-in template.
+	DefaultTemplateConfigMap string
 }
+
+// defaultTemplateKey is the ConfigMap key of the chart-wide default template. The Helm chart
+// writes the template under this key.
+const defaultTemplateKey = "template.html"
 
 // parseReportFlags parses args (everything after the word "report") into its own FlagSet,
 // like run does, so tests can call it repeatedly with different args.
@@ -74,6 +83,9 @@ func parseReportFlags(args []string) (reportOptions, error) {
 	flagSet.StringVar(&opts.Namespace, "namespace", "", "Namespace where cyclops is installed (required)")
 	flagSet.BoolVar(&opts.Welcome, "welcome", false,
 		"Send even when nothing needs attention (one-off welcome run)")
+
+	flagSet.StringVar(&opts.DefaultTemplateConfigMap, "default-template-configmap", "",
+		"ConfigMap whose "+defaultTemplateKey+" key is the template for CertReports without their own (optional)")
 
 	if err := flagSet.Parse(args); err != nil {
 		return reportOptions{}, err
@@ -202,7 +214,7 @@ func generateReport(
 
 	// The template is loaded after the early exit, so a quiet day never reads the ConfigMap. A
 	// bad custom template fails the run here, before anything is sent.
-	tmpl, err := loadTemplate(ctx, c, &cr, opts.Namespace)
+	tmpl, err := loadTemplate(ctx, c, &cr, opts.Namespace, opts.DefaultTemplateConfigMap)
 	if err != nil {
 		return err
 	}
@@ -269,10 +281,16 @@ func renderReport(
 // cyclops namespace, ADR 0018). A missing ConfigMap, a missing key or a template that does
 // not parse is an error, so a broken custom template fails the run instead of sending
 // nothing or a half-rendered email (ADR 0005).
+//
+// A CertReport without its own reference uses the ConfigMap named by defaultConfigMap (the
+// chart-wide default, ADR 0005 amendment), or the built-in template if that is empty too.
 func loadTemplate(
-	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, namespace string,
+	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, namespace, defaultConfigMap string,
 ) (*template.Template, error) {
 	ref := cr.Spec.EmailTemplateConfigMapRef
+	if ref == nil && defaultConfigMap != "" {
+		ref = &cyclopsv1alpha1.TemplateConfigMapRef{Name: defaultConfigMap, Key: defaultTemplateKey}
+	}
 	if ref == nil {
 		return render.Default, nil
 	}

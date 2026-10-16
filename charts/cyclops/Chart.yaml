@@ -1,0 +1,10 @@
+apiVersion: v2
+name: cyclops
+description: Daily report of cert-manager Certificates that are expired, never issued, or overdue for renewal
+type: application
+version: 0.1.0-alpha.3
+appVersion: v0.1.0-alpha.2
+home: https://github.com/sakshitposting-irl/cyclops
+sources:
+  - https://github.com/sakshitposting-irl/cyclops
+kubeVersion: ">=1.25.0-0"

@@ -14,7 +14,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 2 | CRD scope: cluster-scoped, single `CertReport` Kind | [0002-crd-scope.md](0002-crd-scope.md) |
 | 3 | What we watch: cert-manager `Certificate` resources, no usage/attachment filtering | [0003-cert-watch-target.md](0003-cert-watch-target.md) |
 | 4 | Failure diagnostics: structured fields + raw `Reason` passthrough, no message categorization | [0004-failure-diagnostics.md](0004-failure-diagnostics.md) |
-| 5 | Email templating: default `html/template`, overridable via ConfigMap reference | [0005-email-templating.md](0005-email-templating.md) |
+| 5 | Email templating: default `html/template`, overridable via ConfigMap reference, or chart-wide via `--default-template-configmap` (amendment) | [0005-email-templating.md](0005-email-templating.md) |
 | 6 | Scheduling model: controller reconciles CR and owns a child `CronJob` | [0006-scheduling-model.md](0006-scheduling-model.md) |
 | 7 | Notification channels: typed `notifiers` list in the CRD; v1 ships both `Email` and `Webhook` (revised; originally webhook was deferred to v2) | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
@@ -57,6 +57,12 @@ works is described in [`../internals/`](../README.md#internals).
     - the chart in this repo, at `charts/cyclops`;
     - Helm as the only install path;
     - OCI publishing to GHCR.
+  - **Started:** a hand-written chart at `charts/cyclops` mirrors the
+    kustomize install (same RBAC, flags and names with the release prefix)
+    and implements ADR 0014's values and `values.schema.json`. The CRD
+    template is copied from `config/crd/bases` by `make helm-crd`. Not yet
+    decided: OCI publishing, chart versioning, and whether kustomize `config/`
+    stays as a second install path.
 - State & dedup: how to avoid re-alerting on the same cert every single day
   once it's reported, and where that state lives. ADR 0015 settles the
   empty-report part (no email; a one-time welcome instead) and adds a

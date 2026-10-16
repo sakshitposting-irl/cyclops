@@ -1,0 +1,14 @@
+{{- /* Email template override (ADR 0005). A CertReport opts in with
+spec.emailTemplateConfigMapRef: {name: <this ConfigMap>, key: template.html}. */ -}}
+{{- if .Values.emailTemplate.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cyclops.emailTemplateConfigMap" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cyclops.labels" . | nindent 4 }}
+data:
+  template.html: |
+    {{- (default (.Files.Get "files/default.html.tmpl") .Values.emailTemplate.content) | nindent 4 }}
+{{- end }}

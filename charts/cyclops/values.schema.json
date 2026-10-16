@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": { "type": "array", "items": { "type": "object" } },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": { "enum": ["SES", "SMTP"] },
+        "smtp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+            "tls": { "enum": ["StartTLS", "TLS", "None"] },
+            "credentialsSecretName": { "type": "string" }
+          },
+          "if": { "properties": { "tls": { "const": "None" } }, "required": ["tls"] },
+          "then": { "properties": { "credentialsSecretName": { "const": "" } } }
+        },
+        "ses": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" },
+            "credentialsSecretName": { "type": "string" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "provider": { "const": "SMTP" } } },
+          "then": {
+            "required": ["smtp"],
+            "properties": { "smtp": { "required": ["host"], "properties": { "host": { "minLength": 1 } } } }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "SES" } } },
+          "then": {
+            "required": ["ses"],
+            "properties": { "ses": { "required": ["region"], "properties": { "region": { "minLength": 1 } } } }
+          }
+        }
+      ]
+    },
+    "emailTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "useAsDefault": { "type": "boolean" },
+        "name": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "reportServiceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "annotations": { "type": "object" } }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "leaderElection": { "type": "boolean" },
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "annotations": { "type": "object" } }
+        },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" }
+      }
+    },
+    "crd": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" }, "keep": { "type": "boolean" } }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "userRoles": { "type": "boolean" } }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

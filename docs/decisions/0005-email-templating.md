@@ -75,3 +75,16 @@ data:
       </table>
     </body></html>
 ```
+
+## Amendment: chart-wide default template
+Status: decided with the Helm chart ([ADR 0016](README.md), still open).
+
+A Helm-only user edits the template in the chart and expects it to apply, but the reference
+above is per `CertReport`. The controller now has `--default-template-configmap=<name>`, which
+it passes on to the report Pod. A `CertReport` with no `emailTemplateConfigMapRef` then reads
+the key `template.html` of that ConfigMap (in the cyclops namespace); a reference of its own
+still wins. The flag is empty by default, so "omitted means built-in" still holds unless the
+operator opts in. The chart sets it from `emailTemplate.useAsDefault` (default `false`).
+- Pros: one edit applies everywhere; opt-in, so nothing changes for existing installs.
+- Cons: a broken default template fails every report that uses it, on the next day that has
+  findings; the default ConfigMap's key name is now a contract between the chart and the binary.

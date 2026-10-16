@@ -1,0 +1,78 @@
+# Default values for cyclops (v1alpha1). Validated by values.schema.json.
+
+image:
+  repository: ghcr.io/sakshitposting-irl/cyclops
+  # Defaults to the chart's appVersion. The report Pods run this same image (ADR 0006).
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Mail delivery is configured once per install (ADR 0014). A CertReport only
+# says who gets the email.
+email:
+  provider: SMTP # SES | SMTP
+  # Do not put credentials in this file. Create the Secret yourself in the
+  # release namespace and reference it by name.
+  smtp:
+    host: "" # required when provider is SMTP
+    port: null # optional; defaults from tls (StartTLS 587, TLS 465, None 25)
+    tls: StartTLS # StartTLS | TLS | None
+    credentialsSecretName: "" # keys: username, password. Empty = no AUTH
+  ses:
+    region: "" # required when provider is SES
+    credentialsSecretName: "" # keys: access-key-id, secret-access-key. Empty = IRSA / Pod Identity
+
+# Email template (ADR 0005). The chart ships the built-in default as files/default.html.tmpl and
+# renders it into a ConfigMap, key `template.html`. A CertReport uses it only when it sets
+#   spec.emailTemplateConfigMapRef: {name: <emailTemplate.name>, key: template.html}
+# To customise: edit files/default.html.tmpl in your copy of the chart, or override here with
+#   --set-file emailTemplate.content=my.html   (or a block scalar in your values file).
+#
+# By default each CertReport must opt in with that reference. Set useAsDefault: true to make this
+# template the default for every CertReport that has no reference of its own (a CertReport's own
+# reference still wins). Requires create: true.
+emailTemplate:
+  create: true
+  useAsDefault: false
+  name: "" # defaults to <fullname>-email-template
+  content: "" # empty = the shipped default
+
+# The ServiceAccount the report Pods run as (ADR 0014, decision 6).
+reportServiceAccount:
+  annotations: {} # e.g. eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/cyclops-ses
+
+controller:
+  replicas: 1
+  leaderElection: true
+  serviceAccount:
+    annotations: {}
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The CertReport CRD ships in templates/ so it is installed and upgraded with the release.
+crd:
+  enabled: true
+  # Keep the CRD (and so every CertReport) when the release is uninstalled.
+  keep: true
+
+# Aggregated-style ClusterRoles for people who manage CertReports.
+rbac:
+  userRoles: true
+
+# HTTPS metrics endpoint, protected by TokenReview/SubjectAccessReview.
+metrics:
+  enabled: true
+  port: 8443
