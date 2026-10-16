@@ -388,6 +388,11 @@ make undeploy
 make uninstall
 ```
 
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first (design decisions live in
+[`docs/decisions/`](docs/decisions/README.md)), and note the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
