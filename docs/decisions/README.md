@@ -27,6 +27,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 15 | Scheduled runs email only when something needs attention; each `CertReport` gets a one-time welcome email (policy + current findings), sent by a one-off Job, with state in a small owned ConfigMap | [0015-email-policy.md](0015-email-policy.md) |
 | 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
 | 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch) | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
+| 20 | Ingress annotation mode: opt-in per CR (`spec.ingressAnnotationMode`, exclusive with `namespaces`); Ingresses join a CR with one annotation and map to Certificates by `secretName`; no cross-tenant guard in v1 (revises 10's RBAC) | [0020-ingress-annotation-mode.md](0020-ingress-annotation-mode.md) |
 
 ## Open / not yet decided
 
