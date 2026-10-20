@@ -59,6 +59,10 @@ type Row struct {
 	// (ADR 0004). Either may be empty.
 	State  string
 	Reason string
+	// Ingresses are the Ingresses that put the certificate in scope in
+	// annotation mode (ADR 0020). Empty in namespace mode. Additive change
+	// under ADR 0013.
+	Ingresses []string
 }
 
 // NewTemplateData builds the template data for a report named reportName,
@@ -79,6 +83,7 @@ func NewTemplateData(reportName string, now time.Time, findings []report.Finding
 			FailedIssuanceAttempts: f.Cert.FailedIssuanceAttempts,
 			State:                  f.Cert.State,
 			Reason:                 f.Cert.Reason,
+			Ingresses:              f.Cert.Ingresses,
 		}
 		templateData.Findings = append(templateData.Findings, row)
 	}

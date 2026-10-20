@@ -10,8 +10,9 @@
   Available data (see the chart README for types and details):
     .ReportName   .GeneratedAt   .Findings (may be empty; most urgent first)
     each finding: .Kind .Namespace .Name .NotAfter .DaysLeft .RenewalTime
-                  .FailedIssuanceAttempts .State .Reason
-  .Kind is NeverIssued, Expired or RenewalOverdue. .NotAfter and .RenewalTime are zero when
+                  .FailedIssuanceAttempts .State .Reason .Ingresses
+  .Ingresses lists the Ingresses that put the certificate in scope (annotation mode, ADR 0020);
+  it is empty otherwise. .Kind is NeverIssued, Expired or RenewalOverdue. .NotAfter and .RenewalTime are zero when
   unset: test with .IsZero. Referencing any other field fails the run and sends no email.
 
   Email clients ignore <style> blocks and scripts, so keep styling inline (style="...").
@@ -50,7 +51,13 @@
         {{- else if eq .Kind "RenewalOverdue" }}Renewal overdue
         {{- else }}{{ .Kind }}{{ end -}}
       </td>
-      <td style="padding: 6px 12px 6px 0;">{{ .Namespace }}/{{ .Name }}</td>
+      <td style="padding: 6px 12px 6px 0;">{{ .Namespace }}/{{ .Name }}
+        {{- /* TODO (ADR 0020): when .Ingresses is non-empty, show it under the name, e.g.
+          {{ with .Ingresses }}<br><span style="color: #59636e; font-size: 12px;">Ingress: {{ join . ", " }}</span>{{ end }}
+          html/template has no "join": either add a func to the template FuncMap in render.go
+          or range over .Ingresses. Kept in this cell (not a new column) so namespace-mode
+          reports do not get an empty column. */ -}}
+      </td>
       <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
         {{- if .NotAfter.IsZero }}never issued
         {{- else }}{{ .NotAfter.Format "2006-01-02" }}
