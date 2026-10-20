@@ -54,7 +54,13 @@ const (
 	NotifierTypeEmail NotifierType = "Email"
 )
 
+// AnnotationCRName is set on an Ingress to put the Certificates behind it in
+// the scope of the named CertReport. Only read when that CertReport has
+// spec.ingressAnnotationMode set (ADR 0020).
+const AnnotationCRName = "cyclops.sakshitposting-irl.github.io/cr-name"
+
 // CertReportSpec defines the desired state of CertReport (ADR 0018).
+// +kubebuilder:validation:XValidation:rule="!(has(self.ingressAnnotationMode) && self.ingressAnnotationMode && has(self.namespaces) && size(self.namespaces) > 0)",message="namespaces and ingressAnnotationMode are mutually exclusive"
 type CertReportSpec struct {
 	// schedule is a cron expression (UTC) for when the report runs. It is copied
 	// to the owned CronJob. The CRD only does a loose shape check; the API server
@@ -106,6 +112,12 @@ type CertReportSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
+
+	// ingressAnnotationMode limits the report to Certificates behind Ingresses
+	// annotated with AnnotationCRName set to this CertReport's name. Cannot be
+	// combined with namespaces (ADR 0020).
+	// +optional
+	IngressAnnotationMode bool `json:"ingressAnnotationMode,omitempty"`
 
 	// emailTemplateConfigMapRef points at a ConfigMap holding a custom email
 	// template. Omitted means the built-in template.

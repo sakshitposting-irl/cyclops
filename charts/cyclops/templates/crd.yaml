@@ -84,6 +84,12 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              ingressAnnotationMode:
+                description: |-
+                  ingressAnnotationMode limits the report to Certificates behind Ingresses
+                  annotated with AnnotationCRName set to this CertReport's name. Cannot be
+                  combined with namespaces (ADR 0020).
+                type: boolean
               namespaces:
                 description: |-
                   namespaces limits the report to Certificates in these namespaces. Omitted
@@ -165,6 +171,10 @@ spec:
             required:
             - notifiers
             type: object
+            x-kubernetes-validations:
+            - message: namespaces and ingressAnnotationMode are mutually exclusive
+              rule: '!(has(self.ingressAnnotationMode) && self.ingressAnnotationMode
+                && has(self.namespaces) && size(self.namespaces) > 0)'
           status:
             description: status defines the observed state of CertReport
             properties:
