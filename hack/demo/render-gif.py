@@ -1,4 +1,4 @@
-"""Turn a demo-failed-run.sh transcript into a terminal-style GIF.
+"""Turn a failed-run.sh transcript into a terminal-style GIF.
 Usage: render-gif.py TRANSCRIPT OUT.gif   (needs Pillow; text after '### START' is drawn)"""
 import sys
 from PIL import Image, ImageDraw, ImageFont

@@ -276,7 +276,7 @@ While a run is in progress the previous value is kept.
 
 ![A good run, a broken mail host, and the fix](docs/assets/failed-run.gif)
 
-The recording is a real run on kind (`hack/demo-failed-run.sh`). The condition only says that a run
+The recording is a real run on kind (`hack/demo/failed-run.sh`). The condition only says that a run
 failed. For the cause, read the Job's logs:
 
 ```sh
@@ -309,7 +309,7 @@ docker build -t cyclops:dev . && kind load docker-image cyclops:dev --name cyclo
 make kustomize
 bin/kustomize build config/default | sed 's#controller:latest#cyclops:dev#g' | kubectl apply --server-side -f -
 
-kubectl apply -f hack/kind-mail.yaml                    # MailHog and the mail settings
+kubectl apply -f hack/kind/mail.yaml                    # MailHog and the mail settings
 kubectl -n mailhog rollout status deploy/mailhog        # wait for it, or the first run cannot connect
 kubectl apply -f test/cluster/testdata/fixtures.yaml    # test certificates
 ```

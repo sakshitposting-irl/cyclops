@@ -4,7 +4,7 @@
 # (CertReport kind-test, MailHog, fixtures). Takes about 3 minutes: it waits for real
 # scheduled runs. Everything it changes is put back on exit.
 #
-#   hack/demo-failed-run.sh | tee demo.log && python3 hack/render-gif.py demo.log docs/assets/failed-run.gif
+#   hack/demo/failed-run.sh | tee demo.log && python3 hack/demo/render-gif.py demo.log docs/assets/failed-run.gif
 set -euo pipefail
 
 # Every kubectl call in this script is pinned to the kind cluster.

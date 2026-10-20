@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Syncs repo sources into the chart. Wraps the generated CRD (config/crd/bases) as a chart template, gated by crd.enabled and
-# optionally annotated helm.sh/resource-policy: keep (crd.keep). Run via `make helm-crd`.
+# Syncs generated and shared sources into the Helm chart (run via `make helm-crd`):
+#   - the generated CRD, wrapped in a template gated by crd.enabled and optionally annotated
+#     helm.sh/resource-policy: keep (crd.keep);
+#   - the built-in email template, so chart-only users can see and edit it.
+# Never edit the chart's copies by hand; they are overwritten.
 set -euo pipefail
-src=config/crd/bases/cyclops.sakshitposting-irl.github.io_certreports.yaml
-dst=charts/cyclops/templates/crd.yaml
+
+crd_src=config/crd/bases/cyclops.sakshitposting-irl.github.io_certreports.yaml
+crd_dst=charts/cyclops/templates/crd.yaml
 {
   echo '{{- if .Values.crd.enabled }}'
-  # drop the leading "---" and add the keep annotation next to controller-gen's
+  # drop a leading "---" and add the keep annotation next to controller-gen's
   sed -e '1{/^---$/d}' \
     -e 's|^  annotations:$|  annotations:\n    {{- if .Values.crd.keep }}\n    helm.sh/resource-policy: keep\n    {{- end }}|' \
-    "$src"
+    "$crd_src"
   echo '{{- end }}'
-} > "$dst"
+} > "$crd_dst"
 
-# The built-in email template ships in the chart too, so chart-only users can see and edit it.
 cp internal/render/default.html.tmpl charts/cyclops/files/default.html.tmpl
