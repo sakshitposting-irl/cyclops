@@ -198,7 +198,7 @@ func generateReport(
 	}
 	log.Info("loaded CertReport", "namespaces", cr.Spec.Namespaces, "notifiers", len(cr.Spec.Notifiers))
 
-	findings, err := findCertificates(ctx, c, cr.Spec.Namespaces, now)
+	findings, err := findCertificates(ctx, c, &cr, now)
 	if err != nil {
 		return err
 	}
@@ -317,9 +317,16 @@ func loadTemplate(
 // returns the ones that need attention as of now, most urgent first (ADR 0012). Failure
 // diagnostics are read as well, but they only decorate findings and never add one (ADR 0009).
 func findCertificates(
-	ctx context.Context, c client.Reader, namespaces []string, now time.Time,
+	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, now time.Time,
 ) ([]report.Finding, error) {
-	snap, err := certmanager.List(ctx, c, namespaces)
+	var snap certmanager.Snapshot
+	var err error
+	if cr.Spec.IngressAnnotationMode {
+		// ADR 0020: scope is the Certificates behind annotated Ingresses.
+		snap, err = certmanager.ListForIngresses(ctx, c, cr.Name, cyclopsv1alpha1.AnnotationCRName)
+	} else {
+		snap, err = certmanager.List(ctx, c, cr.Spec.Namespaces)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("listing certificates: %w", err)
 	}

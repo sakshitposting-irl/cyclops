@@ -18,9 +18,12 @@ package certmanager
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/sakshitposting-irl/cyclops/internal/report"
@@ -32,6 +35,10 @@ type Snapshot struct {
 	Requests     []cmapi.CertificateRequest
 	Orders       []acmev1.Order
 	Challenges   []acmev1.Challenge
+
+	// Ingresses maps each kept Certificate's secret to the Ingresses that use
+	// it. Only set in annotation mode (ADR 0020).
+	Ingresses map[SecretKey][]string
 }
 
 // List reads Certificates, CertificateRequests, Orders and Challenges from
@@ -93,7 +100,79 @@ func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, 
 func (s Snapshot) CertStatuses() []report.CertStatus {
 	statuses := make([]report.CertStatus, 0, len(s.Certificates))
 	for i := range s.Certificates {
-		statuses = append(statuses, ToCertStatus(&s.Certificates[i], s.Requests, s.Orders, s.Challenges))
+		status := ToCertStatus(&s.Certificates[i], s.Requests, s.Orders, s.Challenges)
+		// TODO: status.Ingresses = sorted copy of s.Ingresses[SecretKey{cert.Namespace,
+		// cert.Spec.SecretName}] (a nil map is fine in namespace mode). Copy, don't
+		// alias, so sorting does not reorder the map's slice.
+		statuses = append(statuses, status)
 	}
 	return statuses
 }
+
+// SecretKey identifies a TLS Secret by namespace and name. It is the join key
+// between an Ingress's spec.tls[].secretName and Certificate.spec.secretName
+// (ADR 0020).
+type SecretKey struct{ Namespace, SecretName string }
+
+// AnnotatedIngresses lists Ingresses cluster-wide and returns, for every
+// Ingress annotated with AnnotationCRName == crName, its TLS secrets mapped to
+// the names of the Ingresses that use them. Two Ingresses can share a
+// secretName, so the value is a slice (ADR 0020).
+func AnnotatedIngresses(ctx context.Context, c client.Reader, crName, annotationKey string) (map[SecretKey][]string, error) {
+	var ingList networkingv1.IngressList
+	if err := c.List(ctx, &ingList); err != nil {
+		return nil, err
+	}
+	out := make(map[SecretKey][]string)
+	for i := range ingList.Items {
+		ing := &ingList.Items[i]
+		if ing.Annotations[annotationKey] != crName {
+			continue
+		}
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName == "" {
+				continue
+			}
+			k := SecretKey{Namespace: ing.Namespace, SecretName: tls.SecretName}
+			out[k] = append(out[k], ing.Name)
+		}
+	}
+	return out, nil
+}
+
+// ListForIngresses is List for annotation mode (ADR 0020): the scope is the
+// Certificates behind Ingresses annotated annotationKey == crName, found by
+// secretName, instead of a list of namespaces.
+func ListForIngresses(ctx context.Context, c client.Reader, crName, annotationKey string) (Snapshot, error) {
+	secrets, err := AnnotatedIngresses(ctx, c, crName, annotationKey)
+	var snapshot Snapshot
+	if err != nil {
+		return snapshot, err
+	}
+	if len(secrets) == 0 {
+		return snapshot, nil
+	}
+	nsSet := make(map[string]struct{})
+	for k := range secrets {
+		nsSet[k.Namespace] = struct{}{}
+	}
+	namespaces := slices.Sorted(maps.Keys(nsSet))
+
+	snapshot, err = List(ctx, c, namespaces)
+	if err != nil {
+		return snapshot, err
+	}
+
+	// Keep only the Certificates behind an annotated Ingress. Requests, Orders
+	// and Challenges stay unfiltered; they are only looked up per kept
+	// Certificate.
+	snapshot.Certificates = slices.DeleteFunc(snapshot.Certificates, func(cert cmapi.Certificate) bool {
+		_, ok := secrets[SecretKey{Namespace: cert.Namespace, SecretName: cert.Spec.SecretName}]
+		return !ok
+	})
+	snapshot.Ingresses = secrets
+	return snapshot, nil
+}
+
+// TODO: carry the map on Snapshot so CertStatuses can attach Ingress names to
+// report.CertStatus (new Ingresses []string field, ADR 0013 additive change).

@@ -53,4 +53,8 @@ type CertStatus struct {
 	// verbatim. Its wording is not stable across cert-manager versions, so
 	// it is for humans to read, not for code to match on.
 	Reason string
+
+	// Ingresses are the names of the annotated Ingresses that put this
+	// certificate in scope (ADR 0020). Empty outside annotation mode.
+	Ingresses []string
 }

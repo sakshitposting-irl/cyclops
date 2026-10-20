@@ -105,7 +105,8 @@ func TestFindCertificates(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			findings, err := findCertificates(context.Background(), c, tt.namespaces, now)
+			cr := &cyclopsv1alpha1.CertReport{Spec: cyclopsv1alpha1.CertReportSpec{Namespaces: tt.namespaces}}
+			findings, err := findCertificates(context.Background(), c, cr, now)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -149,3 +149,37 @@ func TestSnapshot_CertStatuses(t *testing.T) {
 		t.Errorf("CertStatuses() = %v, want %v", names, want)
 	}
 }
+
+// TestAnnotatedIngresses covers the Ingress lookup (ADR 0020).
+// TODO: build a fake client with networkingv1 added to the scheme and these
+// Ingresses, then assert the returned map (sort each slice before comparing):
+//   - two annotated Ingresses sharing one secretName -> one key, two names
+//   - an Ingress with two tls entries -> two keys
+//   - an Ingress with a different cr-name -> skipped
+//   - an Ingress with no annotation -> skipped
+//   - a tls entry with an empty secretName -> skipped
+//   - no Ingresses at all -> empty map, nil error
+func TestAnnotatedIngresses(t *testing.T) {
+	t.Skip("TODO: scaffold")
+}
+
+// TestListForIngresses covers the annotation-mode listing (ADR 0020).
+// TODO: fake client with Ingresses and Certificates, then assert which
+// Certificates come back and that Snapshot.Ingresses is set:
+//   - Certificate whose (namespace, spec.secretName) matches an annotated
+//     Ingress -> kept
+//   - Certificate in the same namespace that no annotated Ingress references
+//     -> dropped
+//   - annotated Ingress whose secret has no Certificate -> nothing returned
+//   - no annotated Ingresses -> empty Snapshot (must NOT list every namespace)
+//   - Certificates in an unrelated namespace are never read
+func TestListForIngresses(t *testing.T) {
+	t.Skip("TODO: scaffold")
+}
+
+// TestCertStatusesIngresses covers attaching Ingress names to CertStatus.
+// TODO: a Snapshot with Ingresses set -> CertStatus.Ingresses is the sorted
+// names for that Certificate's secret; nil Ingresses (namespace mode) -> nil.
+func TestCertStatusesIngresses(t *testing.T) {
+	t.Skip("TODO: scaffold")
+}
