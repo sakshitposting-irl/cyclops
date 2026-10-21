@@ -101,9 +101,10 @@ func (s Snapshot) CertStatuses() []report.CertStatus {
 	statuses := make([]report.CertStatus, 0, len(s.Certificates))
 	for i := range s.Certificates {
 		status := ToCertStatus(&s.Certificates[i], s.Requests, s.Orders, s.Challenges)
-		// TODO: status.Ingresses = sorted copy of s.Ingresses[SecretKey{cert.Namespace,
-		// cert.Spec.SecretName}] (a nil map is fine in namespace mode). Copy, don't
-		// alias, so sorting does not reorder the map's slice.
+		cert := &s.Certificates[i]
+		if names := s.Ingresses[SecretKey{cert.Namespace, cert.Spec.SecretName}]; len(names) > 0 {
+			status.Ingresses = slices.Sorted(slices.Values(names))
+		}
 		statuses = append(statuses, status)
 	}
 	return statuses
@@ -173,6 +174,3 @@ func ListForIngresses(ctx context.Context, c client.Reader, crName, annotationKe
 	snapshot.Ingresses = secrets
 	return snapshot, nil
 }
-
-// TODO: carry the map on Snapshot so CertStatuses can attach Ingress names to
-// report.CertStatus (new Ingresses []string field, ADR 0013 additive change).
