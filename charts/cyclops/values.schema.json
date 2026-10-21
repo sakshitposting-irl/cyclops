@@ -101,7 +101,7 @@
     "rbac": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "userRoles": { "type": "boolean" } }
+      "properties": { "userRoles": { "type": "boolean" }, "ingressAccess": { "type": "boolean" } }
     },
     "metrics": {
       "type": "object",

@@ -37,6 +37,7 @@ const (
 	testProd   = "prod"
 	testDev    = "dev"
 	testWeb    = "web"
+	testNever  = "NeverIssued"
 )
 
 func days(n float64) time.Duration { return time.Duration(n * 24 * float64(time.Hour)) }
@@ -140,6 +141,27 @@ func TestRender_Default(t *testing.T) {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("body contains %q", unwanted)
 		}
+	}
+}
+
+func TestRender_DefaultIngresses(t *testing.T) {
+	data := TemplateData{
+		ReportName:  testReport,
+		GeneratedAt: now.UTC(),
+		Findings: []Row{
+			{Kind: testNever, Namespace: testDev, Name: testBroken, Ingresses: []string{"ingress-prod", "ingress-qa"}},
+			{Kind: testNever, Namespace: testProd, Name: testWeb},
+		},
+	}
+	body, err := Render(Default, data)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if !strings.Contains(body, "Ingress: ingress-prod, ingress-qa") {
+		t.Errorf("body missing the Ingress list")
+	}
+	if n := strings.Count(body, "Ingress:"); n != 1 {
+		t.Errorf("Ingress label appears %d times, want 1 (a row without Ingresses shows none)", n)
 	}
 }
 

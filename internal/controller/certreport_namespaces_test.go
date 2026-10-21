@@ -121,6 +121,25 @@ var _ = Describe("CertReport namespaces", func() {
 		Expect(spy.reasons).To(BeEmpty())
 	})
 
+	It("is True with reason AnnotationMode in ingress annotation mode", func() {
+		Expect(k8sClient.Create(ctx, &cyclopsv1alpha1.CertReport{
+			ObjectMeta: metav1.ObjectMeta{Name: reportName},
+			Spec: cyclopsv1alpha1.CertReportSpec{
+				IngressAnnotationMode: true,
+				Notifiers: []cyclopsv1alpha1.Notifier{{
+					Type:  cyclopsv1alpha1.NotifierTypeEmail,
+					Email: &cyclopsv1alpha1.EmailNotifier{From: fromAddr, To: []string{testRecipient}},
+				}},
+			},
+		})).To(Succeed())
+		reconcileOnce()
+
+		cond := namespacesCond()
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal("AnnotationMode"))
+	})
+
 	It("is True when every listed namespace exists", func() {
 		createReport(reportName, present, otherPresent)
 		reconcileOnce()

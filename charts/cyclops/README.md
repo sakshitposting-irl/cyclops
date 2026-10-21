@@ -110,6 +110,7 @@ Each row in `.Findings`:
 | `.DaysLeft` | int | Whole days until `NotAfter`, rounded down; negative once expired. Only meaningful when `NotAfter` is set |
 | `.RenewalTime` | `time.Time` (UTC) | When cert-manager is due to renew. Zero if none scheduled |
 | `.FailedIssuanceAttempts` | int | cert-manager's failed issuance count |
+| `.Ingresses` | []string | Names of the annotated Ingresses that put the certificate in scope (annotation mode). Empty otherwise |
 | `.State`, `.Reason` | string | cert-manager's own diagnostics, verbatim. Either may be empty. `Reason` is untrusted text |
 
 Times are `time.Time`, so format them with `.NotAfter.Format "2006-01-02"`.
@@ -146,5 +147,6 @@ rejects bad combinations at `helm install`/`upgrade`: SMTP without a host, SES w
 | `emailTemplate.useAsDefault` | `false` | Use that ConfigMap for every `CertReport` without its own reference |
 | `crd.enabled` / `crd.keep` | `true` / `true` | Install the CRD; keep it (and every `CertReport`) on uninstall |
 | `rbac.userRoles` | `true` | Admin/editor/viewer ClusterRoles for `CertReport` |
+| `rbac.ingressAccess` | `true` | Let report Pods read Ingresses; needed only for `spec.ingressAnnotationMode` |
 | `metrics.enabled` / `.port` | `true` / `8443` | HTTPS metrics endpoint |
 | `controller.*` | | replicas, leader election, resources, scheduling |

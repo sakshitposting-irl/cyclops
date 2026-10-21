@@ -1,7 +1,7 @@
 # 20. Ingress annotation mode
 
 ## Status
-In consideration.
+Accepted.
 
 ## Context
 ADR 0003 fixes what we watch (cert-manager `Certificate` resources) and ADR 0010
@@ -46,7 +46,8 @@ Option A.
   union of the two: a CEL rule rejects a CR that sets both the mode and
   `spec.namespaces`, so a list the author thought was active is never
   silently unused. The `NamespacesFound` condition does not apply in this
-  mode.
+  mode: it stays `True` with reason `AnnotationMode`, so the status shape is
+  stable.
 - **Annotation:** one key, `cyclops.sakshitposting-irl.github.io/cr-name:
   <CertReport name>`. Its presence is the opt-in; there is no separate watch
   key.
@@ -59,8 +60,10 @@ Option A.
   empty in namespace mode, and the default template hides it when empty.
 - **Guard:** none in v1.
 - **Dangling annotation:** an annotation naming a CR that does not exist, or
-  an Ingress whose secret has no Certificate, is skipped and logged by the
-  controller. No Event and no condition.
+  an Ingress whose secret has no Certificate, is skipped
+  silently: no log line, no Event and no condition. Checking that an annotation
+  points at something real is left to the Ingress owner, as with other
+  annotation-driven controllers.
 - **RBAC:** `get/list/watch` on `networking.k8s.io` `ingresses`, added to the
   ClusterRole and gated in the Helm chart.
 
@@ -73,7 +76,7 @@ Option A.
   optional allowlist field (e.g. `allowedNamespaces`) can be added later
   without breaking existing CRs.
 - A typo in the annotation fails silently from the user's side: the Ingress is
-  just never reported, and the only trace is in the controller logs. This
+  just never reported, and nothing is logged. This
   follows the usual behaviour of annotations a controller does not act on,
   but it is the main thing to document in the README.
 - Gateway API (`HTTPRoute`/`Gateway`) is out of scope for v1.

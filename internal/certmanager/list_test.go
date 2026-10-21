@@ -178,8 +178,36 @@ func TestListForIngresses(t *testing.T) {
 }
 
 // TestCertStatusesIngresses covers attaching Ingress names to CertStatus.
-// TODO: a Snapshot with Ingresses set -> CertStatus.Ingresses is the sorted
-// names for that Certificate's secret; nil Ingresses (namespace mode) -> nil.
 func TestCertStatusesIngresses(t *testing.T) {
-	t.Skip("TODO: scaffold")
+	cert := func(ns, name, secret string) cmapi.Certificate {
+		return cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       cmapi.CertificateSpec{SecretName: secret},
+		}
+	}
+	const prod, qa = "ingress-prod", "ingress-qa"
+	shared := []string{prod, qa}
+	unsorted := []string{qa, prod}
+	snap := Snapshot{
+		Certificates: []cmapi.Certificate{cert("a", "one", "tls-one"), cert("a", "two", "tls-two")},
+		Ingresses:    map[SecretKey][]string{{"a", "tls-one"}: unsorted},
+	}
+
+	statuses := snap.CertStatuses()
+	if got := statuses[0].Ingresses; !slices.Equal(got, shared) {
+		t.Errorf("Ingresses = %v, want sorted %v", got, shared)
+	}
+	if statuses[1].Ingresses != nil {
+		t.Errorf("Certificate with no Ingress got %v, want nil", statuses[1].Ingresses)
+	}
+	if !slices.Equal(unsorted, []string{qa, prod}) {
+		t.Errorf("CertStatuses reordered the map's slice: %v", unsorted)
+	}
+
+	snap.Ingresses = nil // namespace mode
+	for _, st := range snap.CertStatuses() {
+		if st.Ingresses != nil {
+			t.Errorf("namespace mode: Ingresses = %v, want nil", st.Ingresses)
+		}
+	}
 }

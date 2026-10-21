@@ -321,6 +321,13 @@ func (r *CertReportReconciler) credentialsCondition(ctx context.Context) (metav1
 // empty list means "all namespaces" and has nothing to check.
 func (r *CertReportReconciler) namespacesCondition(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (metav1.Condition, error) {
 	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionNamespacesFound}
+	if cr.Spec.IngressAnnotationMode {
+		// Scope comes from annotated Ingresses (ADR 0020); there is no namespace list to check.
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "AnnotationMode"
+		cond.Message = "not applicable: scope comes from annotated Ingresses"
+		return cond, nil
+	}
 	if len(cr.Spec.Namespaces) == 0 {
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = "AllNamespaces"

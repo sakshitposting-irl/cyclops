@@ -24,7 +24,7 @@ silently fails.
 
 ```mermaid
 flowchart LR
-    CR["CertReport<br/>(schedule, namespaces, notifiers)"] -->|reconciles| CTRL[cyclops controller]
+    CR["CertReport<br/>(schedule, scope, notifiers)"] -->|reconciles| CTRL[cyclops controller]
     CTRL -->|owns| CJ[CronJob]
     CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
     JOB -->|lists| CM["cert-manager<br/>Certificates"]
@@ -32,11 +32,11 @@ flowchart LR
     JOB -.->|planned| HOOK[Webhook]
 ```
 
-1. You create a cluster-scoped `CertReport` describing the schedule, which namespaces to cover and who
-   to notify.
+1. You create a cluster-scoped `CertReport` describing the schedule, what to cover (namespaces, or
+   annotated Ingresses) and who to notify.
 2. The controller keeps a Kubernetes `CronJob` in sync with it.
-3. On schedule, the CronJob runs cyclops in **report mode**: it lists every cert-manager
-   `Certificate` and picks out the ones that need attention. If there are any, it sends the report
+3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
+   `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
    to each notifier (only `Email` exists today). If there are none, it sends nothing.
 4. Planned: when a `CertReport` is first created, cyclops sends a one-time welcome message with the
    current findings. This also checks that delivery works.
@@ -98,7 +98,7 @@ privileges. The CR and the CronJob are data and hold no permissions of their own
 | Actor | ServiceAccount | Access |
 |---|---|---|
 | Controller | `cyclops-controller-manager` | Read and write `CertReport`s and their status. Manage the CronJob, Jobs and state ConfigMap in `cyclops-system`. Read the Secrets, ConfigMaps and Namespaces it validates (the Namespace check is cluster-wide). Create Events. No access to certificates. |
-| Report Pod | `cyclops-report` | Read-only: `get`/`list` Certificates, CertificateRequests, Orders and Challenges; `get` its `CertReport`; `get` ConfigMaps in `cyclops-system` for a custom template. No write access. |
+| Report Pod | `cyclops-report` | Read-only: `get`/`list` Certificates, CertificateRequests, Orders and Challenges; `get` Ingresses (for annotation mode); `get` its `CertReport`; `get` ConfigMaps in `cyclops-system` for a custom template. No write access. |
 | CronJob scheduling | Kubernetes' built-in CronJob controller | Creates Jobs from the CronJob. Nothing to configure. |
 
 The manager's role is generated from `+kubebuilder:rbac` markers. The report Pod's role is written
@@ -131,6 +131,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Helm chart | Started: `charts/cyclops` (unpublished; [ADR 0016](docs/decisions/README.md) still open) |
 | Published image | Done for `v0.1.0-alpha.2` (linux/amd64) |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
+| Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
 
 ## Documentation
 
@@ -292,6 +293,41 @@ does not change `ReportSucceeding`.
 
 **Uninstall:** `kubectl delete certreport --all`, then
 `kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl delete -f -`.
+
+### Ingress annotation mode
+
+Set `spec.ingressAnnotationMode: true` (exclusive with `spec.namespaces`) and annotate each Ingress
+you want in that report with `cyclops.sakshitposting-irl.github.io/cr-name: <CertReport name>`. The
+Certificates behind its `tls[].secretName` entries are reported.
+
+```yaml
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata: {name: prod-certs}
+spec:
+  ingressAnnotationMode: true       # cannot be combined with namespaces
+  notifiers:
+    - type: Email
+      email: {from: cyclops@example.com, to: [platform@example.com]}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  namespace: tenant
+  annotations:
+    cyclops.sakshitposting-irl.github.io/cr-name: prod-certs
+spec:
+  tls: [{hosts: [shop.example.com], secretName: shop-tls}]   # the Certificate with this secretName is reported
+```
+
+Each row in the report names the Ingress it came from. Report Pods need to read Ingresses; the
+Helm chart grants this unless you set `rbac.ingressAccess: false`.
+
+An annotation that names a CertReport that does not exist, or has a typo in the key or the name, fails
+silently: the Ingress is just never reported and nothing is logged; checking the annotation is up to the
+Ingress owner. Anyone who can edit an Ingress can send that Ingress's certificate details to a
+CertReport's recipients, so restrict who can edit Ingresses.
 
 ## Try it on kind
 

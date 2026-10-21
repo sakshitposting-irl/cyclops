@@ -52,11 +52,8 @@
         {{- else }}{{ .Kind }}{{ end -}}
       </td>
       <td style="padding: 6px 12px 6px 0;">{{ .Namespace }}/{{ .Name }}
-        {{- /* TODO (ADR 0020): when .Ingresses is non-empty, show it under the name, e.g.
-          {{ with .Ingresses }}<br><span style="color: #59636e; font-size: 12px;">Ingress: {{ join . ", " }}</span>{{ end }}
-          html/template has no "join": either add a func to the template FuncMap in render.go
-          or range over .Ingresses. Kept in this cell (not a new column) so namespace-mode
-          reports do not get an empty column. */ -}}
+        {{- if .Ingresses }}<br><span style="color: #59636e; font-size: 12px;">Ingress:
+          {{- range $i, $n := .Ingresses }}{{ if $i }},{{ end }} {{ $n }}{{ end }}</span>{{ end -}}
       </td>
       <td style="padding: 6px 12px 6px 0; white-space: nowrap;">
         {{- if .NotAfter.IsZero }}never issued

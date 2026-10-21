@@ -17,6 +17,10 @@ rules:
 - apiGroups: ["cyclops.sakshitposting-irl.github.io"]
   resources: ["certreports"]
   verbs: ["get"]
+# Annotation mode (ADR 0020).
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list"]
 ---
 # Custom email template lookup (ADR 0005), limited to the cyclops namespace.
 apiVersion: rbac.authorization.k8s.io/v1

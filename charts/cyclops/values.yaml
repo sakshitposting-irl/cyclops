@@ -71,6 +71,8 @@ crd:
 # Aggregated-style ClusterRoles for people who manage CertReports.
 rbac:
   userRoles: true
+  # Let report Pods read Ingresses, needed for spec.ingressAnnotationMode (ADR 0020).
+  ingressAccess: true
 
 # HTTPS metrics endpoint, protected by TokenReview/SubjectAccessReview.
 metrics:
