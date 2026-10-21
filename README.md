@@ -13,12 +13,12 @@ cert-manager renews certificates automatically. cyclops is the backstop for when
 silently fails.
 
 > [!NOTE]
-> **Status: alpha, in development.** The full path works on a local kind cluster with a fake mail
+> **Status: beta, in development.** The API is still `v1alpha1` and can change between releases. The full path works on a local kind cluster with a fake mail
 > server: a `CertReport` becomes a CronJob, a run emails the certificates that need attention, and
 > a healthy run sends nothing, and a failed run shows up on the `CertReport`. Not built yet: the
-> welcome message, the webhook notifier and a Helm chart. Real SMTP
+> welcome message and the webhook notifier, and the Helm chart in this repo is not published. Real SMTP
 > authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status),
-> [Install the alpha](#install-the-alpha) and [Try it on kind](#try-it-on-kind).
+> [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
 
@@ -129,7 +129,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Welcome message | Not started |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
 | Helm chart | Started: `charts/cyclops` (unpublished; [ADR 0016](docs/decisions/README.md) still open) |
-| Published image | Done for `v0.1.0-alpha.2` (linux/amd64) |
+| Published image | Done for `v0.1.0-beta.1` (linux/amd64) |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
 
@@ -176,11 +176,11 @@ DeepCopy code:
 make manifests generate
 ```
 
-## Install the alpha
+## Install the beta
 
 > [!WARNING]
-> `v0.1.0-alpha.2` is an early alpha, published for linux/amd64 only. It has no welcome message, no
-> webhook and no Helm chart (see [Status](#status)). Unlike `v0.1.0-alpha.1`, it shows a failed
+> `v0.1.0-beta.1` is a beta, published for linux/amd64 only. It has no welcome message, no
+> webhook, and the Helm chart is not published (see [Status](#status)). Unlike `v0.1.0-alpha.1`, it shows a failed
 > report run through the `ReportSucceeding` condition. Try it on a non-production cluster first, or
 > on kind with [the section below](#try-it-on-kind).
 
@@ -192,10 +192,10 @@ with the published image. The image appears twice in the manifests (the controll
 `--report-image` argument), so substitute both:
 
 ```sh
-git clone --branch v0.1.0-alpha.2 https://github.com/sakshitposting-irl/cyclops.git
+git clone --branch v0.1.0-beta.1 https://github.com/sakshitposting-irl/cyclops.git
 cd cyclops
 
-IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-alpha.2
+IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.1
 kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl apply --server-side -f -
 ```
 
