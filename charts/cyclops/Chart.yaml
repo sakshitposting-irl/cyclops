@@ -1,6 +1,6 @@
 apiVersion: v2
 name: cyclops
-description: Daily report of cert-manager Certificates that are expired, never issued, or overdue for renewal
+description: Daily backstop report for cert-manager renewals that silently fail
 type: application
 version: 0.1.0-beta.1
 appVersion: v0.1.0-beta.1

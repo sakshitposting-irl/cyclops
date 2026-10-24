@@ -1,16 +1,16 @@
 # cyclops
 
-A Kubernetes controller that watches [cert-manager](https://cert-manager.io) `Certificate`
-resources and reports certificates that are expired, were never issued, or are overdue for renewal
-(past the renewal time cert-manager set for them). Reports go out by email (SES or SMTP);
-webhook delivery is planned.
+A backstop for [cert-manager](https://cert-manager.io): a daily report of certificates that are
+expired, never issued, or overdue for renewal, so a silently failing renewal gets noticed before it
+becomes an outage.
+
+cyclops is a Kubernetes controller that watches cert-manager `Certificate` resources. "Overdue"
+means past the renewal time cert-manager set for the certificate. Reports go out by email (SES or
+SMTP); webhook delivery is planned.
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
 one-time welcome message per report configuration, to explain this and prove delivery works, is
 planned.
-
-cert-manager renews certificates automatically. cyclops is the backstop for when that renewal
-silently fails.
 
 > [!NOTE]
 > **Status: beta, in development.** The API is still `v1alpha1` and can change between releases. The full path works on a local kind cluster with a fake mail
