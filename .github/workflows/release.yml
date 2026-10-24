@@ -1,0 +1,146 @@
+name: Release
+
+# Cut a release by pushing a version tag:
+#   git tag v0.1.0 && git push origin v0.1.0
+# A tag with a suffix (v0.1.0-beta.2) is published as a GitHub pre-release and does not move
+# the `latest` image tag.
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    name: Verify the tag and the tree
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the tag is a version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a version tag like v1.2.3 or v1.2.3-beta.1"
+            exit 1
+          fi
+
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: make test
+
+      # The chart ships its own copy of the CRD. If it is out of date with the API types the
+      # release would install a stale schema, so fail instead.
+      - name: Lint the chart and check its CRD is current
+        run: |
+          make helm-lint
+          git diff --exit-code -- charts/
+
+  image:
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
+    name: Build and push the multi-arch image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the image tags
+        id: tags
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cyclops"
+          tags="${image}:${TAG}"
+          # Only a final release (no -suffix) becomes `latest`.
+          if [[ "$TAG" != *-* ]]; then
+            tags="${tags},${image}:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      # The Dockerfile's builder stage runs on the build machine and cross-compiles with Go,
+      # and the final stage only copies the binary, so arm64 needs no emulation.
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+  release:
+    needs: image
+    permissions:
+      contents: write
+      packages: write
+    name: Publish the chart and the GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # The chart's version and appVersion come from the tag, so the values in Chart.yaml are
+      # only placeholders. appVersion is the default image tag, so the chart installs the image
+      # built above.
+      - name: Package the chart
+        env:
+          TAG: ${{ github.ref_name }}
+        run: helm package charts/cyclops --version "${TAG#v}" --app-version "$TAG" --destination dist
+
+      - name: Push the chart to GHCR
+        env:
+          TAG: ${{ github.ref_name }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          helm push "dist/cyclops-${TAG#v}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+
+      - name: Create the GitHub release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [[ "$TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "dist/cyclops-${TAG#v}.tgz" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            "${flags[@]}"

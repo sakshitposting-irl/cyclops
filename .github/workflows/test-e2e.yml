@@ -1,7 +1,10 @@
 name: E2E Tests
 
 on:
-  workflow_dispatch:  # temporarily manual-only until the repo has real implementation to test
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 permissions: {}
 
