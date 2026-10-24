@@ -40,7 +40,8 @@ subjects:
     name: {{ include "cyclops.controllerServiceAccount" . }}
     namespace: {{ $ns }}
 ---
-# Controller: own namespace only (CronJobs, and the credentials Secret check of ADR 0014).
+# Controller: own namespace only (CronJobs, the credentials Secret check of ADR 0014, and the
+# template ConfigMap check of ADR 0018).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -50,7 +51,7 @@ metadata:
     {{- include "cyclops.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["secrets"]
+    resources: ["configmaps", "secrets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]

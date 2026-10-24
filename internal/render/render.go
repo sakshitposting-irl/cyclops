@@ -24,6 +24,11 @@ import (
 	"html/template"
 )
 
+// DefaultTemplateKey is the ConfigMap key of the chart-wide default template (ADR 0005
+// amendment). The Helm chart writes the template under this key, and both the controller and
+// report mode read it from there.
+const DefaultTemplateKey = "template.html"
+
 //go:embed default.html.tmpl
 var defaultTemplateText string
 

@@ -45,6 +45,7 @@ import (
 
 	cyclopsv1alpha1 "github.com/sakshitposting-irl/cyclops/api/v1alpha1"
 	"github.com/sakshitposting-irl/cyclops/internal/email"
+	"github.com/sakshitposting-irl/cyclops/internal/render"
 )
 
 // CertReportReconciler turns a CertReport into the Kubernetes objects that run it.
@@ -99,6 +100,9 @@ type CertReportReconciler struct {
 // The credentials Secret is only read to check it exists and has the expected keys (ADR 0014).
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch
 
+// A template ConfigMap is only read to check it has the key and parses (ADR 0018, question 7).
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=get;list;watch
+
 // Events about a cluster-scoped CertReport are recorded outside the cyclops namespace.
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
@@ -108,10 +112,10 @@ type CertReportReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
 // TODO(adr0015): RBAC markers for the rest of the cyclops namespace: jobs
-// (get;list;watch;create;update;patch;delete), configmaps (get;list;watch;create;update).
+// (get;list;watch;create;update;patch;delete), and create;update on configmaps (state).
 
 // Reconcile brings the cluster in line with one CertReport. It runs whenever the CertReport,
-// its CronJob or the credentials Secret changes, and is safe to run repeatedly: when nothing
+// its CronJob, the credentials Secret or its template ConfigMap changes, and is safe to run repeatedly: when nothing
 // has changed it performs no writes.
 //
 // Each pass:
@@ -119,7 +123,8 @@ type CertReportReconciler struct {
 //  2. Create or update the owned CronJob from the spec, and set ScheduleValid from the result.
 //  3. Check the mail credentials Secret and set CredentialsFound.
 //  4. Check that the namespaces in the spec exist and set NamespacesFound.
-//  5. Write the status conditions once, and only if they changed.
+//  5. Check that the email template loads and parses and set TemplateValid.
+//  6. Write the status conditions once, and only if they changed.
 //
 // For the Reconcile contract, see
 // https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
@@ -200,8 +205,14 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	report := reportCondition(cj, meta.FindStatusCondition(cr.Status.Conditions, cyclopsv1alpha1.ConditionReportSucceeding))
 	r.warnOnTransition(&cr, report)
 
-	// TODO(adr0018): TemplateValid: if emailTemplateConfigMapRef is set, load the
-	// ConfigMap key from the cyclops namespace and parse it with internal/render.
+	// Step 5: can the email template be loaded and parsed? Healthy days send no email (ADR
+	// 0015), so this is the only early sign of a broken template (ADR 0018).
+	tmplCond, err := r.templateCondition(ctx, &cr)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	r.warnOnTransition(&cr, tmplCond)
+
 	// TODO(adr0015): welcome email: if the state ConfigMap cyclops-state-<name> has no
 	// welcomeSentAt, create a one-off Job from the CronJob template with --welcome
 	// (name includes a hash of generation + credentials Secret resourceVersion).
@@ -210,8 +221,8 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// No finalizers are needed: the CronJob, Jobs and state ConfigMap are garbage
 	// collected through their owner reference to the cluster-scoped CertReport.
 
-	// Step 5: one status write for all conditions.
-	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond, report)
+	// Step 6: one status write for all conditions.
+	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond, report, tmplCond)
 }
 
 // reportCondition turns the CronJob's own status into the ReportSucceeding condition (ADR
@@ -360,6 +371,86 @@ func (r *CertReportReconciler) namespacesCondition(ctx context.Context, cr *cycl
 	cond.Reason = "Found"
 	cond.Message = "all namespaces in spec.namespaces exist"
 	return cond, nil
+}
+
+// templateRef is the ConfigMap key cr's email is rendered from: its own reference, else the
+// chart-wide default ConfigMap (ADR 0005 amendment), else nil for the built-in template. Report
+// mode applies the same rule when it loads the template.
+func (r *CertReportReconciler) templateRef(cr *cyclopsv1alpha1.CertReport) *cyclopsv1alpha1.TemplateConfigMapRef {
+	if ref := cr.Spec.EmailTemplateConfigMapRef; ref != nil {
+		return ref
+	}
+	if r.DefaultTemplateConfigMap != "" {
+		return &cyclopsv1alpha1.TemplateConfigMapRef{Name: r.DefaultTemplateConfigMap, Key: render.DefaultTemplateKey}
+	}
+	return nil
+}
+
+// templateCondition reports whether the template cr will be rendered with can be loaded and
+// parsed (ADR 0018, question 7). It covers a missing ConfigMap, a missing key and a syntax
+// error, and nothing more: a field name that does not exist, such as {{ .Findngs }}, only fails
+// when the template runs. With no custom or default template the built-in one is used and
+// there is nothing to check.
+func (r *CertReportReconciler) templateCondition(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (metav1.Condition, error) {
+	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionTemplateValid}
+	ref := r.templateRef(cr)
+	if ref == nil {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "BuiltIn"
+		cond.Message = "no custom template is configured: the built-in template is used"
+		return cond, nil
+	}
+
+	var cm corev1.ConfigMap
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: ref.Name}, &cm)
+	switch {
+	case apierrors.IsNotFound(err):
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "ConfigMapNotFound"
+		cond.Message = fmt.Sprintf("ConfigMap %s/%s does not exist", r.Namespace, ref.Name)
+		return cond, nil
+	case err != nil:
+		return cond, fmt.Errorf("reading template ConfigMap %s/%s: %w", r.Namespace, ref.Name, err)
+	}
+
+	text, ok := cm.Data[ref.Key]
+	if !ok {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "KeyMissing"
+		cond.Message = fmt.Sprintf("ConfigMap %s/%s has no key %q", r.Namespace, ref.Name, ref.Key)
+		return cond, nil
+	}
+	if _, err := render.Parse(text); err != nil {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "ParseError"
+		cond.Message = fmt.Sprintf("template %s/%s key %q does not parse: %v", r.Namespace, ref.Name, ref.Key, err)
+		return cond, nil
+	}
+	cond.Status = metav1.ConditionTrue
+	cond.Reason = "Valid"
+	cond.Message = fmt.Sprintf("template %s/%s key %q parses", r.Namespace, ref.Name, ref.Key)
+	return cond, nil
+}
+
+// certReportsForConfigMap maps a change of a ConfigMap in the cyclops namespace to the
+// CertReports that render from it, through their own reference or the chart-wide default.
+// Other ConfigMaps are ignored.
+func (r *CertReportReconciler) certReportsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.Namespace {
+		return nil
+	}
+	var list cyclopsv1alpha1.CertReportList
+	if err := r.List(ctx, &list); err != nil {
+		logf.FromContext(ctx).Error(err, "listing CertReports for a template ConfigMap change")
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if ref := r.templateRef(&list.Items[i]); ref != nil && ref.Name == obj.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
+	}
+	return reqs
 }
 
 // certReportsForNamespace maps a created or deleted Namespace to the CertReports that name it
@@ -545,14 +636,15 @@ func (r *CertReportReconciler) certReportsForSecret(ctx context.Context, obj cli
 //   - a CertReport changing (For);
 //   - a CronJob it owns changing or being deleted by hand (Owns), so it is put back;
 //   - the credentials Secret changing (Watches), so CredentialsFound follows it;
+//   - a template ConfigMap changing (Watches), so TemplateValid follows it;
 //   - a Namespace being created or deleted (Watches), so NamespacesFound follows it.
 func (r *CertReportReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// TODO: Owns(&batchv1.Job{}), and a watch on the template ConfigMap mapped back to
-	// CertReports.
+	// TODO: Owns(&batchv1.Job{}).
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cyclopsv1alpha1.CertReport{}).
 		Owns(&batchv1.CronJob{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.certReportsForSecret)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.certReportsForConfigMap)).
 		// Only creation and deletion change whether a namespace exists; skip the noisy updates.
 		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.certReportsForNamespace),
 			builder.WithPredicates(predicate.Funcs{

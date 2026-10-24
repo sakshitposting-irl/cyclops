@@ -81,8 +81,8 @@ no finalizers are needed.
 1. A user creates the `CertReport`.
 2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
    `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
-   also creates a one-off welcome Job. (`TemplateValid` and the welcome Job are designed but not
-   built yet; see [Status](#status).)
+   also creates a one-off welcome Job. (The welcome Job is designed but not built yet; see
+   [Status](#status).)
 3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
 4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
    the report if anything needs attention.
@@ -118,7 +118,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Converting cert-manager objects (`internal/certmanager`) | Done, tested |
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound`, `ReportSucceeding` |
-| `TemplateValid` condition | Not started |
+| `TemplateValid` condition | Done, unit-tested. Checks that the template ConfigMap and key exist and that the template parses (the chart-wide default included); a misspelled field name is only caught when the template runs ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. Not yet handled: the `--welcome` message text |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
 | Email rendering (`internal/render`) | Done, tested |

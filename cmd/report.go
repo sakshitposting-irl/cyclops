@@ -72,7 +72,7 @@ type reportOptions struct {
 
 // defaultTemplateKey is the ConfigMap key of the chart-wide default template. The Helm chart
 // writes the template under this key.
-const defaultTemplateKey = "template.html"
+const defaultTemplateKey = render.DefaultTemplateKey
 
 // parseReportFlags parses args (everything after the word "report") into its own FlagSet,
 // like run does, so tests can call it repeatedly with different args.
