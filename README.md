@@ -13,11 +13,13 @@ one-time welcome message per report configuration, to explain this and prove del
 planned.
 
 > [!NOTE]
-> **Status: beta, in development.** The API is still `v1alpha1` and can change between releases. The full path works on a local kind cluster with a fake mail
-> server: a `CertReport` becomes a CronJob, a run emails the certificates that need attention, and
-> a healthy run sends nothing, and a failed run shows up on the `CertReport`. Not built yet: the
-> welcome message and the webhook notifier, and the Helm chart in this repo is not published. Real SMTP
-> authentication, STARTTLS and SES have only been tested with fakes. See [Status](#status),
+> **Status: beta, in development.** The API is still `v1alpha1` and can change between releases.
+> Install it with Helm from the published chart. The full path has run on a local kind cluster with
+> a fake mail server, installed from the repo's manifests: a `CertReport` becomes a CronJob, a run
+> emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
+> up on the `CertReport`. Not built yet: the welcome message and the webhook notifier. Real SMTP
+> authentication, STARTTLS and SES have only been tested with fakes, and installing from the
+> published chart has not been tested end to end yet. See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
@@ -68,11 +70,13 @@ no finalizers are needed.
 
 ### Lifecycle
 
-**Install** (`make deploy`), in order:
+**Install** (`helm install`, or `make deploy`), in order:
 
 1. The CRD is registered with the API server.
-2. The `cyclops-system` namespace, the ServiceAccounts and the RBAC are created.
-3. The operator creates the mail ConfigMap and credentials Secret (see
+2. The ServiceAccounts and the RBAC are created in the cyclops namespace (`cyclops-system`).
+   `make deploy` creates the namespace; with Helm you create it first.
+3. The mail ConfigMap is created: by the chart from its values, or by the operator when using
+   `make deploy`. The operator always creates the credentials Secret, if one is needed (see
    [ADR 0014](docs/decisions/0014-notifier-credentials.md)). cert-manager must already be installed.
 4. The controller Deployment starts and begins watching `CertReport`s.
 
@@ -128,8 +132,9 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message | Not started |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Started: `charts/cyclops` (unpublished; [ADR 0016](docs/decisions/README.md) still open) |
-| Published image | Done for `v0.1.0-beta.1` (linux/amd64) |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.2`). It lints and renders; installing the published chart has not been tested end to end. [ADR 0016](docs/decisions/README.md) is still open (chart versioning, whether the kustomize manifests stay a second install path) |
+| Published image | `v0.1.0-beta.2`, for linux/amd64 and linux/arm64 |
+| Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
 
@@ -139,6 +144,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
   what's still open.
 - [**Internals**](docs/README.md#internals): how the code works (startup, leader election, the
   report pipeline).
+- [**Helm chart**](charts/cyclops/README.md): every value, and how to customise the email template.
 
 ## Development
 
@@ -179,61 +185,54 @@ make manifests generate
 ## Install the beta
 
 > [!WARNING]
-> `v0.1.0-beta.1` is a beta, published for linux/amd64 only. It has no welcome message, no
-> webhook, and the Helm chart is not published (see [Status](#status)). Unlike `v0.1.0-alpha.1`, it shows a failed
-> report run through the `ReportSucceeding` condition. Try it on a non-production cluster first, or
-> on kind with [the section below](#try-it-on-kind).
+> `v0.1.0-beta.2` is a beta. It has no welcome message and no webhook (see [Status](#status)).
+> Real SMTP authentication, STARTTLS and SES have only been tested with fakes, and installing from
+> the published chart has not been tested end to end yet. Try it on a non-production cluster first,
+> or on kind with [the section below](#try-it-on-kind).
 
 **Prerequisites:** a cluster with [cert-manager](https://cert-manager.io) installed, `kubectl`, and
-`git`.
+[Helm](https://helm.sh) 3.8 or newer (needed for OCI charts).
 
-**1. Install cyclops.** The manifests live in this repository, so clone the release and apply them
-with the published image. The image appears twice in the manifests (the controller's `image:` and its
-`--report-image` argument), so substitute both:
+The chart is published at `oci://ghcr.io/sakshitposting-irl/charts/cyclops` and the image, for
+linux/amd64 and linux/arm64, at `ghcr.io/sakshitposting-irl/cyclops`. The chart's `appVersion` is
+the image tag, so a chart version installs the matching image.
 
-```sh
-git clone --branch v0.1.0-beta.1 https://github.com/sakshitposting-irl/cyclops.git
-cd cyclops
-
-IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.1
-kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl apply --server-side -f -
-```
-
-This creates the `cyclops-system` namespace, the `CertReport` CRD, both ServiceAccounts with their
-RBAC, and the controller Deployment.
-
-**2. Tell cyclops how to send mail.** Create the ConfigMap `cyclops-mail-config` in
-`cyclops-system`. The report Pod will not start without it. For SMTP:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata: {name: cyclops-mail-config, namespace: cyclops-system}
-data:
-  CYCLOPS_EMAIL_PROVIDER: SMTP
-  CYCLOPS_SMTP_HOST: smtp.example.com
-  CYCLOPS_SMTP_PORT: "587"
-  CYCLOPS_SMTP_TLS: StartTLS      # StartTLS (default), TLS, or None for an unauthenticated relay
-```
-
-For SES, set `CYCLOPS_EMAIL_PROVIDER: SES` and `CYCLOPS_SES_REGION`, and give the
-`cyclops-report` ServiceAccount an AWS identity (for example an IRSA annotation). The variable names
-are in [`internal/email/env.go`](internal/email/env.go).
-
-**3. Add credentials, only if you need them.** If your SMTP server wants a login (or SES should use
-static keys), create the Secret and tell the controller its name. Without this, no credentials are used:
+**1. Create the namespace, and the mail credentials only if you need them.** If your SMTP server
+wants a login (or SES should use static keys), create the Secret yourself. Credentials never go
+through chart values ([ADR 0014](docs/decisions/0014-notifier-credentials.md)):
 
 ```sh
+kubectl create namespace cyclops-system
+
 kubectl -n cyclops-system create secret generic cyclops-mail-credentials \
   --from-literal=username=<user> --from-literal=password=<password>      # SES: access-key-id, secret-access-key
-
-kubectl -n cyclops-system patch deployment cyclops-controller-manager --type json \
-  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--credentials-secret=cyclops-mail-credentials"}]'
 ```
 
-See [ADR 0014](docs/decisions/0014-notifier-credentials.md) for the reasoning.
+**2. Install the chart.** Mail delivery is configured once per install, in the chart values. A
+`CertReport` only says who gets the email:
 
-**4. Create a `CertReport`.**
+```sh
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.2 \
+  --namespace cyclops-system \
+  --set email.smtp.host=smtp.example.com \
+  --set email.smtp.credentialsSecretName=cyclops-mail-credentials   # leave out if no login is needed
+```
+
+SMTP uses STARTTLS on port 587 by default; see `email.smtp.tls` and `email.smtp.port`. For an
+unauthenticated relay use `--set email.smtp.tls=None` and no credentials Secret (the chart rejects
+`None` together with one). For SES, set `email.provider=SES` and `email.ses.region`, and give the
+report ServiceAccount an AWS identity, for example an IRSA annotation through
+`reportServiceAccount.annotations`, or name a Secret in `email.ses.credentialsSecretName`.
+
+This creates the `CertReport` CRD, both ServiceAccounts with their RBAC, the mail ConfigMap and the
+controller Deployment. Every value, and how to customise the email template, is in the
+[chart README](charts/cyclops/README.md). Check that the controller is running:
+
+```sh
+kubectl -n cyclops-system get pods
+```
+
+**3. Create a `CertReport`.**
 
 ```sh
 kubectl apply -f - <<'EOF'
@@ -249,14 +248,14 @@ spec:
 EOF
 ```
 
-**5. Check it.**
+**4. Check it.**
 
 ```sh
 kubectl get certreport,cronjob -A
 kubectl get certreport cluster-certs -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}'
 ```
 
-`ScheduleValid`, `NamespacesFound` and `CredentialsFound` should all be `True`.
+`ScheduleValid`, `NamespacesFound`, `CredentialsFound` and `TemplateValid` should all be `True`.
 `ReportSucceeding` is `Unknown` (`NoRunsYet`) until the first scheduled run. To send a report now
 instead of waiting for 08:00, run the CronJob once and read its logs:
 
@@ -266,6 +265,11 @@ kubectl -n cyclops-system logs job/first-run
 ```
 
 A healthy cluster logs "nothing to report" and sends no email. That is by design.
+
+**Without Helm.** The kustomize manifests in `config/` still work: follow
+[Deploying your own build](#deploying-your-own-build), using the published image
+(`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.2`) instead of building one. Whether they stay a
+second supported install path is not decided ([ADR 0016](docs/decisions/README.md)).
 
 ### When a report run fails
 
@@ -291,8 +295,21 @@ If you do run one, you can alert on the condition yourself; cyclops ships no ale
 Only scheduled runs count. A Job you create by hand with `kubectl create job --from=cronjob/...`
 does not change `ReportSucceeding`.
 
-**Uninstall:** `kubectl delete certreport --all`, then
-`kubectl kustomize config/default | sed "s#controller:latest#${IMG}#g" | kubectl delete -f -`.
+**Uninstall.** Delete the reports first, so Kubernetes removes the CronJobs they own, then the
+release:
+
+```sh
+kubectl delete certreport --all
+helm uninstall cyclops -n cyclops-system
+```
+
+The chart keeps the CRD when it is uninstalled (`crd.keep`, default `true`), so any `CertReport` you
+did not delete survives. To remove everything, including the credentials Secret you created:
+
+```sh
+kubectl delete crd certreports.cyclops.sakshitposting-irl.github.io
+kubectl delete namespace cyclops-system
+```
 
 ### Ingress annotation mode
 
@@ -375,7 +392,9 @@ nothing. Remove everything with `kind delete cluster --name cyclops`.
 
 ## Deploying your own build
 
-To run a build of your own instead of the published image:
+To run a build of your own instead of the published image (or to deploy the published image from
+the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.2` and
+skip the build and push line):
 
 ```sh
 export IMG=<registry>/cyclops:<tag>

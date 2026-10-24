@@ -1,12 +1,15 @@
 # cyclops Helm chart
 
 Installs the cyclops controller, its CRD (`CertReport`), RBAC, and the install-level mail settings
-(ADR 0014). **Alpha (v1alpha1): the chart is not published yet; install it from a checkout.**
+(ADR 0014). **Beta (v1alpha1).** The chart is published to GHCR as an OCI chart:
 
 ```bash
-helm install cyclops ./charts/cyclops -n cyclops-system --create-namespace \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.2 \
+  -n cyclops-system --create-namespace \
   --set email.smtp.host=smtp.example.com
 ```
+
+or install it from a checkout with `helm install cyclops ./charts/cyclops ...` (same flags).
 
 cert-manager must already be installed. Mail credentials are never set through values: create the
 Secret yourself in the release namespace and reference it by name (`email.smtp.credentialsSecretName`
