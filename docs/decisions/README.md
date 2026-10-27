@@ -88,6 +88,38 @@ works is described in [`../internals/`](../README.md#internals).
   This also settles what `CertReport.status` holds beyond conditions (ADR 0018
   question 8), and whether `kubectl get` gets a health column.
 
+## Where we stopped (2026-10-25): welcome email and webhook
+
+Notes as written at the end of the day, not new decisions.
+
+**Welcome email** ([ADR 0015](0015-email-policy.md): decided, not built)
+- "Sent" is tracked in a state ConfigMap `cyclops-state-<certreport>`, owned by the `CertReport`,
+  with the key `welcomeSentAt`.
+- The controller creates a one-off Job running report mode with `--welcome`. The report Pod stays
+  read-only. The controller watches the Job: on success it writes `welcomeSentAt` and sets
+  `WelcomeSent=True`; on failure it sets `WelcomeSent=False` (reason `JobFailed`) and emits a
+  Warning Event.
+- A failed welcome is retried only when the hash of the `CertReport`'s `generation` and the
+  credentials Secret's `resourceVersion` changes.
+- Known gaps: delivery is at-least-once (a Job that sends and then fails, or `backoffLimit`
+  retries, can send twice). A crash between Job success and the `welcomeSentAt` write is
+  recovered on the next reconcile only while the Job still exists, so it depends on
+  `ttlSecondsAfterFinished`. Deleting the state ConfigMap by hand sends the welcome again.
+- Still to build: `Owns(&batchv1.Job{})`, RBAC for `jobs` (create/get/list/watch) and for
+  `configmaps` create/update (the manager's ConfigMap rule is read-only since `TemplateValid`),
+  the `--welcome` message text, and a `Welcome` field in the template data (ADR 0013, additive).
+
+**Webhook** ([ADR 0017](0017-webhook-notifier.md): open)
+- None of its six questions is decided (URL and credential location, whether ADR 0015 applies,
+  auth, retries, Slack/Teams payloads, JSON schema).
+- Retries (question 4) also affect the email Jobs: `backoffLimit` is 0 today.
+
+**Release scope: proposed, not confirmed.** A first workable `v0.1.0` that is email-only:
+verify the release and install from the published chart, test real SMTP and SES, turn on
+`test.yml` and `lint.yml`, settle the "controller never reads the mail password" wording, and
+record the dedup decision (repeat on every run) and ADR 0016. Then the welcome email, non-ACME
+diagnostics, and the webhook. If this is confirmed, ADR 0007's "v1 ships both" needs revising.
+
 ## Ground rules for this project
 
 - No implementation until the relevant decisions are made and confirmed.
