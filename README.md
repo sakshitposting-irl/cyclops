@@ -1,4 +1,4 @@
-# cyclops
+<h1 align="center"><img src="docs/assets/logo.png" alt="cyclops: keeps an eye on your certificates" width="440"></h1>
 
 A backstop for [cert-manager](https://cert-manager.io): a daily report of certificates that are
 expired, never issued, or overdue for renewal, so a silently failing renewal gets noticed before it
