@@ -129,11 +129,19 @@ jobs:
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           helm push "dist/cyclops-${TAG#v}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
 
+      # A release for this tag can already exist (made by hand in the GitHub UI, or left by an
+      # earlier run of this job). `gh release create` fails on that with "tag_name already
+      # exists", so attach the chart to the existing release and keep its title and notes.
       - name: Create the GitHub release
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; attaching the chart to it."
+            gh release upload "$TAG" "dist/cyclops-${TAG#v}.tgz" --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           flags=()
           if [[ "$TAG" == *-* ]]; then
             flags+=(--prerelease)
