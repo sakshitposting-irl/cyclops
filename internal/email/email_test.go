@@ -25,6 +25,7 @@ const (
 	testOncall    = "oncall@example.com"
 	testNamedFrom = "Cyclops <" + testFrom + ">"
 	testBadAddr   = "nope"
+	testLogoID    = "cyclops-logo"
 )
 
 func TestParseAddress(t *testing.T) {
@@ -216,11 +217,11 @@ func TestParseInline(t *testing.T) {
 		img     InlineImage
 		wantErr bool
 	}{
-		{name: "valid", img: InlineImage{ContentID: "cyclops-logo", ContentType: "image/png", Data: []byte("x")}},
-		{name: "empty ContentID", img: InlineImage{ContentType: "image/png"}, wantErr: true},
-		{name: "empty ContentType", img: InlineImage{ContentID: "cyclops-logo"}, wantErr: true},
-		{name: "CRLF in ContentID", img: InlineImage{ContentID: "a\r\nBcc: evil@example.com", ContentType: "image/png"}, wantErr: true},
-		{name: "bare LF in ContentType", img: InlineImage{ContentID: "cyclops-logo", ContentType: "image/png\nBcc: evil@example.com"}, wantErr: true},
+		{name: "valid", img: InlineImage{ContentID: testLogoID, ContentType: testPNG, Data: []byte("x")}},
+		{name: "empty ContentID", img: InlineImage{ContentType: testPNG}, wantErr: true},
+		{name: "empty ContentType", img: InlineImage{ContentID: testLogoID}, wantErr: true},
+		{name: "CRLF in ContentID", img: InlineImage{ContentID: "a\r\nBcc: evil@example.com", ContentType: testPNG}, wantErr: true},
+		{name: "bare LF in ContentType", img: InlineImage{ContentID: testLogoID, ContentType: "image/png\nBcc: evil@example.com"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -42,6 +42,9 @@ const (
 	testSubject  = "[cyclops] 1 certificate needs attention"
 	testBody     = "<p>web in prod — expired</p>"
 	testSMTPHost = "smtp.example.com"
+	// the inline image used by the SES and SMTP tests
+	testImageID = "one"
+	testPNG     = "image/png"
 
 	verbEHLO     = "EHLO"
 	verbAuth     = "AUTH"
@@ -370,7 +373,7 @@ func TestBuildMIMEInline(t *testing.T) {
 	msg.HTMLBody = `<img src="cid:one"><img src="cid:two"><p>läuft ab ` + strings.Repeat("x", 2000) + "</p>"
 	images := []InlineImage{
 		// 160 bytes encode to more than 76 base64 characters, so this one has to be wrapped.
-		{ContentID: "one", ContentType: "image/png", Data: bytes.Repeat([]byte{0x89, 'P', 'N', 'G'}, 40)},
+		{ContentID: testImageID, ContentType: testPNG, Data: bytes.Repeat([]byte{0x89, 'P', 'N', 'G'}, 40)},
 		{ContentID: "two", ContentType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
 	}
 	msg.Inline = images

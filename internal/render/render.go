@@ -99,8 +99,6 @@ func Render(t *template.Template, data TemplateData) (string, error) {
 // Subject is the email's subject line, set in code rather than by the
 // template (ADR 0013).
 func Subject(data TemplateData) string {
-	// TODO(adr0015): welcome variant of the subject, e.g. "[cyclops] Welcome: ...".
-
 	if data.Welcome {
 		return "[cyclops] Welcome! Let's get you started"
 	}

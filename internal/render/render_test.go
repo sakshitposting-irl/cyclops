@@ -261,6 +261,15 @@ func TestSubject(t *testing.T) {
 			t.Errorf("Subject(%d findings) = %q, want %q", tt.findings, got, tt.want)
 		}
 	}
+
+	// The welcome subject is fixed text: no counts, even when findings exist (ADR 0015).
+	const welcome = "[cyclops] Welcome! Let's get you started"
+	for _, findings := range []int{0, 3} {
+		data := TemplateData{Welcome: true, Findings: make([]Row, findings)}
+		if got := Subject(data); got != welcome {
+			t.Errorf("Subject(welcome, %d findings) = %q, want %q", findings, got, welcome)
+		}
+	}
 }
 
 func TestInlineImages(t *testing.T) {

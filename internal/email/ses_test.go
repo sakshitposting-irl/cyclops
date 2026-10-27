@@ -74,7 +74,7 @@ func TestSESSendInline(t *testing.T) {
 	s := &SES{client: fake}
 	msg := testMessage()
 	msg.Inline = []InlineImage{
-		{ContentID: "one", ContentType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}},
+		{ContentID: testImageID, ContentType: testPNG, Data: []byte{0x89, 'P', 'N', 'G'}},
 		{ContentID: "two", ContentType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
 	}
 

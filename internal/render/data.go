@@ -37,9 +37,14 @@ type TemplateData struct {
 	// Findings are the certificates that need attention, most urgent first.
 	// May be empty.
 	Findings []Row
-	// Bool that decides if welcome mail has to go; one per CertReport, stored in a configmap.
-	Welcome    bool
-	Schedule   string
+	// Welcome is true when this render is the one-time welcome email (ADR 0015), not a
+	// scheduled report. Findings is still filled in, so a custom template that ignores
+	// Welcome never claims "all healthy" when something is wrong.
+	Welcome bool
+	// Schedule is the CertReport's cron schedule, as written (evaluated in UTC).
+	Schedule string
+	// Namespaces are the namespaces the report covers. Empty means every namespace, or, in
+	// Ingress annotation mode, the Ingresses annotated for this report.
 	Namespaces []string
 }
 

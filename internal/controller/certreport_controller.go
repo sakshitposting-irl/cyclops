@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -111,8 +112,13 @@ type CertReportReconciler struct {
 // condition follows namespaces being created or deleted (ADR 0011).
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
-// TODO(adr0015): RBAC markers for the rest of the cyclops namespace: jobs
-// (get;list;watch;create;update;patch;delete), and create;update on configmaps (state).
+// The one-time welcome email (ADR 0015): the controller creates a one-off Job and watches the
+// Jobs it owns. No delete: owner-reference garbage collection removes them with the CertReport.
+// +kubebuilder:rbac:groups=batch,namespace=system,resources=jobs,verbs=get;list;watch;create
+
+// It also records that the welcome was sent in the state ConfigMap cyclops-state-<name>. The read
+// rule for ConfigMaps above covers get, list and watch.
+// +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=create;update
 
 // Reconcile brings the cluster in line with one CertReport. It runs whenever the CertReport,
 // its CronJob, the credentials Secret or its template ConfigMap changes, and is safe to run repeatedly: when nothing
@@ -213,16 +219,111 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	r.warnOnTransition(&cr, tmplCond)
 
-	// TODO(adr0015): welcome email: if the state ConfigMap cyclops-state-<name> has no
-	// welcomeSentAt, create a one-off Job from the CronJob template with --welcome
-	// (name includes a hash of generation + credentials Secret resourceVersion).
-	// On Job success write welcomeSentAt and set WelcomeSent=True; on failure set
-	// WelcomeSent=False reason JobFailed and emit a Warning Event.
-	// No finalizers are needed: the CronJob, Jobs and state ConfigMap are garbage
-	// collected through their owner reference to the cluster-scoped CertReport.
+	// Step 5b: the one-time welcome email (ADR 0015).
+	welcome, err := r.reconcileWelcome(ctx, &cr, cj, creds)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	r.warnOnTransition(&cr, welcome)
 
 	// Step 6: one status write for all conditions.
-	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond, report, tmplCond)
+	return ctrl.Result{}, r.updateStatus(ctx, &cr, schedule, creds, nsCond, report, tmplCond, welcome)
+}
+
+// reconcileWelcome drives the one-time welcome email (ADR 0015) and returns the WelcomeSent
+// condition. Exactly one case applies per call:
+//   - already recorded in the state ConfigMap: True, "Sent";
+//   - credentials not found: Unknown, "WaitingForCredentials";
+//   - no Job for the current hash: create it (unless it already failed), Unknown, "Pending";
+//   - the Job exists: its status decides (welcomeCondition), and on success welcomeSentAt is
+//     written.
+//
+// No finalizers are needed: the Job and the state ConfigMap are garbage collected through their
+// owner reference to the cluster-scoped CertReport.
+func (r *CertReportReconciler) reconcileWelcome(ctx context.Context, cr *cyclopsv1alpha1.CertReport, cj *batchv1.CronJob, creds metav1.Condition) (metav1.Condition, error) {
+	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionWelcomeSent}
+
+	sentAt, sent, err := r.welcomeSentAt(ctx, cr)
+	if err != nil {
+		return cond, err
+	}
+	if sent {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "Sent"
+		cond.Message = "welcome email sent at " + sentAt
+		return cond, nil
+	}
+
+	if creds.Status != metav1.ConditionTrue {
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "WaitingForCredentials"
+		cond.Message = "the welcome email waits for the credentials Secret"
+		return cond, nil
+	}
+
+	// The name includes a hash of the CertReport and the credentials Secret's resourceVersion, so
+	// editing either one starts a fresh attempt.
+	secretRV, err := r.credentialsVersion(ctx)
+	if err != nil {
+		return cond, err
+	}
+	name := welcomeJobName(cr.Name, welcomeHash(cr, secretRV))
+
+	var job batchv1.Job
+	err = r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, &job)
+	switch {
+	case err == nil:
+		cond = welcomeCondition(&job)
+		if cond.Status == metav1.ConditionTrue {
+			if err := r.recordWelcomeSent(ctx, cr, &job); err != nil {
+				return cond, err
+			}
+		}
+		return cond, nil
+	case !apierrors.IsNotFound(err):
+		return cond, fmt.Errorf("reading welcome Job: %w", err)
+	}
+
+	// No Job for this hash. If one already failed it was deleted by its TTL; do not run it
+	// again until the CertReport or the Secret changes (a new hash, so a new name).
+	if prev := meta.FindStatusCondition(cr.Status.Conditions, cyclopsv1alpha1.ConditionWelcomeSent); prev != nil &&
+		prev.Status == metav1.ConditionFalse && prev.Reason == "JobFailed" && strings.Contains(prev.Message, name) {
+		return *prev, nil
+	}
+
+	if err := r.createWelcomeJob(ctx, cr, cj, name); err != nil {
+		return cond, err
+	}
+	cond.Status = metav1.ConditionUnknown
+	cond.Reason = "Pending"
+	cond.Message = fmt.Sprintf("welcome Job %s created", name)
+	return cond, nil
+}
+
+// createWelcomeJob creates the one-off welcome Job: a copy of the CronJob's Job template run
+// with --welcome, owned by the CertReport. AlreadyExists is fine: a stale cache can miss a Job
+// created a moment ago.
+func (r *CertReportReconciler) createWelcomeJob(ctx context.Context, cr *cyclopsv1alpha1.CertReport, cj *batchv1.CronJob, name string) error {
+	spec := cj.Spec.JobTemplate.Spec.DeepCopy()
+	c := &spec.Template.Spec.Containers[0]
+	c.Args = append(c.Args, "--welcome")
+	spec.TTLSecondsAfterFinished = new(int32(86400))
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: r.Namespace,
+			Labels:    maps.Clone(cj.Spec.JobTemplate.Labels),
+		},
+		Spec: *spec,
+	}
+	if err := controllerutil.SetControllerReference(cr, job, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("creating welcome Job: %w", err)
+	}
+	return nil
 }
 
 // reportCondition turns the CronJob's own status into the ReportSucceeding condition (ADR
@@ -277,6 +378,39 @@ func reportCondition(cj *batchv1.CronJob, prev *metav1.Condition) metav1.Conditi
 	cond.Status = metav1.ConditionTrue
 	cond.Reason = "LastRunSucceeded"
 	cond.Message = fmt.Sprintf("the last scheduled run at %s succeeded", cj.Status.LastScheduleTime.Format(time.RFC3339))
+	return cond
+}
+
+// welcomeCondition turns the welcome Job's status into the WelcomeSent condition (ADR 0015).
+// It reads the Job's terminal conditions: Failed only appears once backoffLimit is used up.
+//   - Complete: True, "Sent".
+//   - Failed: False, "JobFailed".
+//   - neither: Unknown, "Running".
+//
+// Messages are stable text (the Job name, never time.Now()), or every reconcile would write
+// status. The Job name carries the hash, so a retry after a fix gets a new message.
+func welcomeCondition(job *batchv1.Job) metav1.Condition {
+	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionWelcomeSent}
+	for _, c := range job.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case batchv1.JobComplete:
+			cond.Status = metav1.ConditionTrue
+			cond.Reason = "Sent"
+			cond.Message = fmt.Sprintf("welcome Job %s completed", job.Name)
+			return cond
+		case batchv1.JobFailed:
+			cond.Status = metav1.ConditionFalse
+			cond.Reason = "JobFailed"
+			cond.Message = fmt.Sprintf("welcome Job %s failed", job.Name)
+			return cond
+		}
+	}
+	cond.Status = metav1.ConditionUnknown
+	cond.Reason = "Running"
+	cond.Message = fmt.Sprintf("sending the welcome email (Job %s is running)", job.Name)
 	return cond
 }
 
@@ -551,6 +685,54 @@ func cronJobName(crName string) string {
 	return name[:maxCronJobNameLen-len(suffix)-1] + "-" + suffix
 }
 
+// welcomeHash identifies one welcome attempt (ADR 0015). It changes when the CertReport is
+// edited or the credentials Secret changes, which is what allows a retry after a fix. It includes
+// the full CertReport name, so two reports whose names share a long start still get different
+// Job names (welcomeJobName cuts the name). The fields are joined with "/" so that, for example,
+// generation 1 with version "2" and generation 12 with no version do not hash the same.
+func welcomeHash(cr *cyclopsv1alpha1.CertReport, secretResourceVersion string) string {
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s/%d/%s", cr.Name, cr.Generation, secretResourceVersion))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// credentialsVersion is the resourceVersion of the credentials Secret, which changes whenever
+// its data does. It is "" when no Secret is configured (SMTP without a login, SES with ambient
+// credentials) or the Secret does not exist yet, so the hash then depends on the CertReport alone.
+func (r *CertReportReconciler) credentialsVersion(ctx context.Context) (string, error) {
+	if r.CredentialsSecret == "" {
+		return "", nil
+	}
+	var secret corev1.Secret
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: r.CredentialsSecret}, &secret)
+	switch {
+	case apierrors.IsNotFound(err):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("reading credentials Secret %s/%s: %w", r.Namespace, r.CredentialsSecret, err)
+	}
+	return secret.ResourceVersion, nil
+}
+
+// maxJobNameLen is the longest Job name that is safe to use: the Job controller copies the name
+// into the job-name label of its Pods, and a label value is at most 63 characters.
+const maxJobNameLen = 63
+
+// welcomeJobName is the name of the one-off welcome Job for the CertReport crName (ADR 0015).
+// hash is what changes when a retry is wanted, so it is kept whole and the CertReport name is
+// cut to make room. The cut name is trimmed of trailing "-" and "." so the name never has one
+// next to the separator, which would not be a valid DNS name.
+//
+// The CertReport name is cut, so two long names sharing a start give the same prefix: the
+// caller must make hash depend on the full name too, or they would get the same Job name.
+func welcomeJobName(crName, hash string) string {
+	const prefix = "cyclops-welcome-"
+	room := maxJobNameLen - len(prefix) - 1 - len(hash)
+	if len(crName) > room {
+		crName = strings.TrimRight(crName[:room], "-.")
+	}
+	return prefix + crName + "-" + hash
+}
+
 // mutateCronJob sets the fields the controller owns on cj and leaves everything else (the
 // API server's defaults) alone, so an unchanged CertReport produces no update. It copies the
 // schedule and run settings from the spec, and builds the report Pod: the same image as the
@@ -645,17 +827,66 @@ func (r *CertReportReconciler) certReportsForSecret(ctx context.Context, obj cli
 	return reqs
 }
 
+func stateConfigMapName(crName string) string { return "cyclops-state-" + crName }
+
+// stateKeyWelcomeSentAt is the key in the state ConfigMap that holds when the welcome email was
+// delivered (ADR 0015).
+const stateKeyWelcomeSentAt = "welcomeSentAt"
+
+// recordWelcomeSent writes welcomeSentAt to the CertReport's state ConfigMap once the welcome
+// Job has completed (ADR 0015). The value is the Job's completion time, not time.Now(), so it is
+// truthful and does not change if this runs twice. The first value written wins: a stale cache
+// read can send a second reconcile through here, and it must not move the timestamp.
+func (r *CertReportReconciler) recordWelcomeSent(ctx context.Context, cr *cyclopsv1alpha1.CertReport, job *batchv1.Job) error {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:      stateConfigMapName(cr.Name),
+		Namespace: r.Namespace,
+	}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		if _, ok := cm.Data[stateKeyWelcomeSentAt]; !ok {
+			// CompletionTime is set on success; fall back to now only if a Job lacks it.
+			at := metav1.Now()
+			if job.Status.CompletionTime != nil {
+				at = *job.Status.CompletionTime
+			}
+			if cm.Data == nil {
+				cm.Data = map[string]string{}
+			}
+			cm.Data[stateKeyWelcomeSentAt] = at.UTC().Format(time.RFC3339)
+		}
+		return controllerutil.SetControllerReference(cr, cm, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("recording welcome sent: %w", err)
+	}
+	return nil
+}
+
+func (r *CertReportReconciler) welcomeSentAt(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (string, bool, error) {
+	var cm corev1.ConfigMap
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: stateConfigMapName(cr.Name)}, &cm)
+	switch {
+	case apierrors.IsNotFound(err):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("reading state ConfigMap: %w", err)
+	}
+	at, ok := cm.Data[stateKeyWelcomeSentAt]
+	return at, ok, nil
+}
+
 // SetupWithManager registers the controller with the Manager and chooses what wakes it up:
 //   - a CertReport changing (For);
 //   - a CronJob it owns changing or being deleted by hand (Owns), so it is put back;
+//   - a welcome Job it owns finishing (Owns), so WelcomeSent follows it;
 //   - the credentials Secret changing (Watches), so CredentialsFound follows it;
 //   - a template ConfigMap changing (Watches), so TemplateValid follows it;
 //   - a Namespace being created or deleted (Watches), so NamespacesFound follows it.
 func (r *CertReportReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// TODO: Owns(&batchv1.Job{}).
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cyclopsv1alpha1.CertReport{}).
 		Owns(&batchv1.CronJob{}).
+		Owns(&batchv1.Job{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.certReportsForSecret)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.certReportsForConfigMap)).
 		// Only creation and deletion change whether a namespace exists; skip the noisy updates.

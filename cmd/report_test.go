@@ -218,36 +218,6 @@ func TestGenerateReport(t *testing.T) {
 		}
 	})
 
-	t.Run("the welcome run sends even with no findings", func(t *testing.T) {
-		f := newRunFixture(t, false, emailNotifier("to@example.com"))
-		if err := f.run(true); err != nil {
-			t.Fatalf("generateReport() error = %v", err)
-		}
-		if len(f.sender.sent) != 1 || f.sender.sent[0].Subject != "[cyclops] Welcome! Let's get you started" {
-			t.Fatalf("sent %+v, want one welcome message", f.sender.sent)
-		}
-	})
-
-	t.Run("the welcome email has its own template: schedule and namespaces, and no findings", func(t *testing.T) {
-		f := newRunFixture(t, true, emailNotifier("to@example.com")) // an expired certificate exists
-		if err := f.run(true); err != nil {
-			t.Fatalf("generateReport() error = %v", err)
-		}
-		if len(f.sender.sent) != 1 {
-			t.Fatalf("sent %d messages, want 1", len(f.sender.sent))
-		}
-		body := f.sender.sent[0].HTMLBody
-		if !strings.Contains(body, "Welcome to Cyclops") || !strings.Contains(body, "0 8 * * *") {
-			t.Fatalf("not the welcome template, or the schedule is missing:\n%s", body)
-		}
-		if strings.Contains(body, "old-cert") {
-			t.Fatalf("the welcome email must not list findings:\n%s", body)
-		}
-		if len(f.sender.sent[0].Inline) != 1 {
-			t.Fatalf("want the logo attached, got %d inline images", len(f.sender.sent[0].Inline))
-		}
-	})
-
 	t.Run("one failing notifier does not stop the others, and the run fails", func(t *testing.T) {
 		f := newRunFixture(t, true,
 			emailNotifier("bad@example.com"),
@@ -296,6 +266,38 @@ func TestGenerateReport(t *testing.T) {
 		}
 		if len(f.sender.sent) != 0 {
 			t.Fatalf("sent %d messages, want none", len(f.sender.sent))
+		}
+	})
+}
+
+func TestGenerateReportWelcome(t *testing.T) {
+	t.Run("the welcome run sends even with no findings", func(t *testing.T) {
+		f := newRunFixture(t, false, emailNotifier("to@example.com"))
+		if err := f.run(true); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 || f.sender.sent[0].Subject != "[cyclops] Welcome! Let's get you started" {
+			t.Fatalf("sent %+v, want one welcome message", f.sender.sent)
+		}
+	})
+
+	t.Run("the welcome email has its own template: schedule and namespaces, and no findings", func(t *testing.T) {
+		f := newRunFixture(t, true, emailNotifier("to@example.com")) // an expired certificate exists
+		if err := f.run(true); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 {
+			t.Fatalf("sent %d messages, want 1", len(f.sender.sent))
+		}
+		body := f.sender.sent[0].HTMLBody
+		if !strings.Contains(body, "Welcome to Cyclops") || !strings.Contains(body, "0 8 * * *") {
+			t.Fatalf("not the welcome template, or the schedule is missing:\n%s", body)
+		}
+		if strings.Contains(body, "old-cert") {
+			t.Fatalf("the welcome email must not list findings:\n%s", body)
+		}
+		if len(f.sender.sent[0].Inline) != 1 {
+			t.Fatalf("want the logo attached, got %d inline images", len(f.sender.sent[0].Inline))
 		}
 	})
 }

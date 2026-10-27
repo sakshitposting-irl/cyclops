@@ -5,6 +5,8 @@ Decided. Settles the "is an email sent when there's nothing to report"
 part of the state & dedup open item. How to avoid re-alerting on the same
 certificate every day is still open.
 
+Welcome email built (2026-10-27); not yet run on a real cluster.
+
 Amended: the welcome email carries no findings. They arrive in the
 scheduled run's own email, a separate message even if both go out at the
 same time.
@@ -90,7 +92,10 @@ breaking anything.
    creates a one-off Job from the CronJob's Job template.
    - The Job runs report mode with `--welcome`.
    - The Job is owned by the `CertReport` and has a
-     `ttlSecondsAfterFinished`.
+     `ttlSecondsAfterFinished` of 24 hours.
+   - It runs once: it inherits the CronJob's `backoffLimit` (0 today), so
+     one failed attempt is a failed Job. Retries for all email Jobs are
+     part of the open webhook/retry question (ADR 0017).
    - Its name includes a hash of the `CertReport`'s `generation` and the
      credentials Secret's `resourceVersion`. The controller creates the
      Job only if none with the current hash exists.
@@ -119,8 +124,8 @@ breaking anything.
    surface (ADR 0018) for something one extra key does. The `TemplateValid`
    condition also parses `welcome.html` when it is present.
 
-   The subject is fixed text, without counts (`[cyclops] Welcome to
-   cyclops`). Findings are only in the scheduled run's email.
+   The subject is fixed text, without counts (`[cyclops] Welcome! Let's
+   get you started`). Findings are only in the scheduled run's email.
 4. **Recording the result.** The controller watches the Jobs it owns.
    - On success, it writes `welcomeSentAt` to the ConfigMap and sets
      `WelcomeSent=True` on the `CertReport`. The report Job itself stays
@@ -129,8 +134,21 @@ breaking anything.
      `WelcomeSent=False` with reason `JobFailed` and emits a Warning Event.
 5. **Retrying after a fix.** Editing the `CertReport` or its credentials
    Secret changes the hash, so the controller creates a new welcome Job.
-   A failed Job with an unchanged hash isn't retried. The controller
+   A failed Job with an unchanged hash isn't retried, even after the Job's
+   TTL has deleted it: the controller keeps `WelcomeSent=False` (reason
+   `JobFailed`), whose message names the failed Job, and does not create
+   that Job again. While the credentials Secret is missing no Job is
+   created and `WelcomeSent` is `Unknown`. The controller
    already watches that Secret for `CredentialsFound` (ADR 0014).
+
+## Known limits
+- **At-least-once delivery.** A Job that sends and then fails can send
+  twice; deleting the state ConfigMap by hand sends the welcome again.
+- **Names.** The state ConfigMap `cyclops-state-<name>` is not a valid
+  name if the `CertReport`'s name is over 239 characters. The Job name is
+  cut and hashed to fit 63 characters.
+- **`.Namespaces`** is empty both for "every namespace" and for Ingress
+  annotation mode, so the built-in welcome text covers both.
 
 ## RBAC changes (relative to ADR 0014)
 Controller, a Role in its own namespace:

@@ -1,5 +1,5 @@
 <h1 align="center"><img src="docs/assets/hero.png" alt="cyclops: keeps an eye on your certificates" width="720"></h1>
-<p align="center"><sub>The one-time welcome email (planned), rendered from the built-in template with sample data.</sub></p>
+<p align="center"><sub>The one-time welcome email, rendered from the built-in template with sample data.</sub></p>
 
 A backstop for [cert-manager](https://cert-manager.io): a daily report of certificates that are
 expired, never issued, or overdue for renewal, so a silently failing renewal gets noticed before it
@@ -10,15 +10,15 @@ means past the renewal time cert-manager set for the certificate. Reports go out
 SMTP); webhook delivery is planned.
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
-one-time welcome message per report configuration, to explain this and prove delivery works, is
-planned.
+one-time welcome message per report configuration explains this and proves delivery works. It is
+on `main` but not in the published beta yet.
 
 > [!NOTE]
 > **Status: beta, in development.** The API is still `v1alpha1` and can change between releases.
 > Install it with Helm from the published chart. The full path has run on a local kind cluster with
 > a fake mail server, installed from the repo's manifests: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
-> up on the `CertReport`. Not built yet: the welcome message and the webhook notifier. Real SMTP
+> up on the `CertReport`. Not built yet: the webhook notifier. The welcome message is on `main` but not in the published beta. Real SMTP
 > authentication, STARTTLS and SES have only been tested with fakes, and installing from the
 > published chart has not been tested end to end yet. See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
@@ -41,8 +41,9 @@ flowchart LR
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
    `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
    to each notifier (only `Email` exists today). If there are none, it sends nothing.
-4. Planned: when a `CertReport` is first created, cyclops sends a one-time welcome message that
-   explains when cyclops emails you. This also checks that delivery works.
+4. When a `CertReport` is first created, cyclops sends a one-time welcome message that explains
+   when cyclops emails you, with no findings in it. This also checks that delivery works. (On
+   `main`; the published beta does not send it yet.)
 
 For certificates that are due, the report also shows cert-manager's own diagnostics (failed
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
@@ -86,8 +87,8 @@ no finalizers are needed.
 1. A user creates the `CertReport`.
 2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
    `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
-   also creates a one-off welcome Job. (The welcome Job is designed but not built yet; see
-   [Status](#status).)
+   also creates a one-off welcome Job and tracks it in the `WelcomeSent` condition. (On `main`; not
+   in the published beta. See [Status](#status).)
 3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
 4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
    the report if anything needs attention.
@@ -124,14 +125,14 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
 | `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound`, `ReportSucceeding` |
 | `TemplateValid` condition | Done, unit-tested. Checks that the template ConfigMap and key exist and that the template parses (the chart-wide default included); a misspelled field name is only caught when the template runs ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
-| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. Not yet handled: the `--welcome` message text |
+| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. `--welcome` sends the welcome message (see below) |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
 | Email rendering (`internal/render`) | Done, tested |
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
-| Welcome message | Not started |
+| Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done on `main`, unit- and envtest-tested (Job creation, success, failure, no retry of a failed Job). Not yet run on a real cluster, and not in the published beta. Own built-in template, overridable with the `welcome.html` key |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
 | Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.2`). It lints and renders; installing the published chart has not been tested end to end. [ADR 0016](docs/decisions/README.md) is still open (chart versioning, whether the kustomize manifests stay a second install path) |
 | Published image | `v0.1.0-beta.2`, for linux/amd64 and linux/arm64 |
@@ -186,7 +187,7 @@ make manifests generate
 ## Install the beta
 
 > [!WARNING]
-> `v0.1.0-beta.2` is a beta. It has no welcome message and no webhook (see [Status](#status)).
+> `v0.1.0-beta.2` is a beta. It has no welcome message (it is on `main`) and no webhook (see [Status](#status)).
 > Real SMTP authentication, STARTTLS and SES have only been tested with fakes, and installing from
 > the published chart has not been tested end to end yet. Try it on a non-production cluster first,
 > or on kind with [the section below](#try-it-on-kind).
