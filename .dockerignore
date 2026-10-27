@@ -15,3 +15,5 @@
 
 # Re-include files embedded into the binary with //go:embed
 !internal/render/default.html.tmpl
+!internal/render/default-welcome.html.tmpl
+!internal/render/logo.png

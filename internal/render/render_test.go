@@ -281,3 +281,43 @@ func TestInlineImages(t *testing.T) {
 		t.Errorf("a body that doesn't use the logo should attach nothing, got %+v", got)
 	}
 }
+
+func TestRender_DefaultWelcome(t *testing.T) {
+	data := TemplateData{
+		ReportName:  testReport,
+		GeneratedAt: now.UTC(),
+		Welcome:     true,
+		Schedule:    "0 8 * * *",
+		Namespaces:  []string{testProd, testDev},
+		// The welcome email never lists certificates, even when some need attention.
+		Findings: []Row{{Kind: testNever, Namespace: testWeb, Name: "secret-cert"}},
+	}
+	body, err := Render(DefaultWelcome, data)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	for _, want := range []string{"Welcome to Cyclops: daily", "<code>0 8 * * *</code> (UTC)", "namespaces prod, dev", "cid:cyclops-logo"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("welcome body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "secret-cert") {
+		t.Errorf("welcome body must not list findings:\n%s", body)
+	}
+	if got := InlineImages(body); len(got) != 1 {
+		t.Errorf("welcome body should attach the logo, got %d images", len(got))
+	}
+}
+
+func TestRender_DefaultWelcomeAllNamespaces(t *testing.T) {
+	body, err := Render(DefaultWelcome, TemplateData{ReportName: testReport, Welcome: true})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if !strings.Contains(body, "every namespace") {
+		t.Errorf("empty Namespaces should say every namespace:\n%s", body)
+	}
+	if strings.Contains(body, "Checks run") {
+		t.Errorf("no Schedule should omit the schedule row:\n%s", body)
+	}
+}

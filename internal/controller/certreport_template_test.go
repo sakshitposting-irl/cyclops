@@ -179,6 +179,13 @@ var _ = Describe("CertReport template", func() {
 		Entry("an unknown function",
 			map[string]string{key: "<p>{{ nosuchfunc .ReportName }}</p>"},
 			metav1.ConditionFalse, reasonParseError, "nosuchfunc"),
+		// The welcome template is optional (ADR 0015 amendment): absent is fine, present must parse.
+		Entry("a valid welcome template next to the report template",
+			map[string]string{key: goodTemplate, "welcome.html": "<p>{{ .Schedule }}</p>"},
+			metav1.ConditionTrue, reasonValid, "welcome.html"),
+		Entry("a welcome template that does not parse",
+			map[string]string{key: goodTemplate, "welcome.html": "<p>{{ .Schedule"},
+			metav1.ConditionFalse, reasonParseError, "welcome.html"),
 		// Only syntax is checked (ADR 0018): a misspelled field fails when the template runs.
 		Entry("a field that does not exist is not caught",
 			map[string]string{key: "<p>{{ .Findngs }}</p>"},

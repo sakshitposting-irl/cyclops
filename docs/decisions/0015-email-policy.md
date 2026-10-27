@@ -5,6 +5,10 @@ Decided. Settles the "is an email sent when there's nothing to report"
 part of the state & dedup open item. How to avoid re-alerting on the same
 certificate every day is still open.
 
+Amended: the welcome email carries no findings. They arrive in the
+scheduled run's own email, a separate message even if both go out at the
+same time.
+
 ## Context
 A report run can find no certificate that is never issued, expired, or
 overdue for renewal (ADR 0012). The renderer already handles this case
@@ -44,10 +48,12 @@ policy. Choices within that:
 - *Also when recipients change.* Needs per-address state; not needed yet.
 
 **What it contains**
-- *Explanation only.* Simpler; findings wait for the first scheduled run.
-- *Explanation plus the current findings* (chosen). The first email is
-  immediately useful, and says either what's wrong now or that everything
-  is healthy.
+- *Explanation only* (chosen). Findings arrive in the scheduled run's own
+  email, so the welcome never repeats them and the two messages stay
+  independent, even if both go out on the same day.
+- *Explanation plus the current findings* (the original choice, dropped).
+  The first email would have been immediately useful, but a welcome sent
+  the same day as a scheduled run would list the same findings twice.
 
 **Who sends it**
 - *The controller directly.* Rejected: the controller would need the mail
@@ -93,15 +99,28 @@ breaking anything.
    - It always sends, even when there are no findings.
    - The template data sets `Welcome: true` along with the schedule and
      namespaces covered. These are additive fields under ADR 0013.
+     `Findings` is still filled in truthfully, so a custom template (ADR
+     0005) that ignores `.Welcome` never claims "all healthy" when something
+     is wrong.
 
-   The default template adds a short explanation:
+   The welcome email has its own built-in template (`default-welcome.html.tmpl`),
+   separate from the report's, so the two can be restyled independently. It
+   shows only a short explanation, no findings:
    - cyclops only emails when a certificate is never issued, expired, or
      more than an hour past its renewal time;
    - the schedule;
    - the namespaces covered.
 
-   Custom templates (ADR 0005) that ignore `.Welcome` still render the
-   findings.
+   A user overrides it with a second key, `welcome.html`, in the same
+   ConfigMap that `emailTemplateConfigMapRef` (or the chart-wide default,
+   ADR 0005 amendment) already points at. A ConfigMap without that key, or no
+   reference at all, uses the built-in welcome template. The alternative, a
+   separate `CertReport` field and chart value, was rejected: it adds API
+   surface (ADR 0018) for something one extra key does. The `TemplateValid`
+   condition also parses `welcome.html` when it is present.
+
+   The subject is fixed text, without counts (`[cyclops] Welcome to
+   cyclops`). Findings are only in the scheduled run's email.
 4. **Recording the result.** The controller watches the Jobs it owns.
    - On success, it writes `welcomeSentAt` to the ConfigMap and sets
      `WelcomeSent=True` on the `CertReport`. The report Job itself stays

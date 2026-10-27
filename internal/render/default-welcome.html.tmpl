@@ -1,0 +1,73 @@
+{{- /*
+  Cyclops welcome email template. Go html/template: everything outside {{ }} is plain HTML you
+  can change freely. These comments produce no output.
+
+  Cyclops sends this once per CertReport, the first time the report is set up (ADR 0015). It
+  explains when cyclops emails and proves that mail delivery works. It does NOT list
+  certificates: those arrive in the scheduled report's own email, even if both go out together.
+
+  NOTHING here is required. The whole file is the email body, sent as one text/html part, so
+  you may restructure, restyle or shorten it, or replace it entirely. What you cannot change:
+    - the subject line (set by cyclops), and
+    - the data available: only the fields below.
+
+  Available data:
+    .ReportName   the CertReport's name
+    .GeneratedAt  when this email was generated (UTC)
+    .Schedule     the report's cron schedule, evaluated in UTC (for example "0 8 * * *")
+    .Namespaces   the namespaces the report covers; empty means every namespace, or, in
+                  Ingress annotation mode, the Ingresses annotated for this report
+    .Findings     the certificates that need attention right now (may be empty). The default
+                  welcome email does not show them; they are here for custom templates.
+  Referencing any other field fails the run and sends no email.
+
+  Email clients ignore <style> blocks and scripts, so keep styling inline (style="...").
+*/ -}}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #1f2328; margin: 0; padding: 24px;">
+  <div style="background: #0c0e0d; margin: -24px -24px 20px; padding: 16px 24px;">{{/* Header band: the logo is attached to the email by cyclops (cid:cyclops-logo). Delete the div to drop it. */}}
+    <img src="cid:cyclops-logo" alt="cyclops" width="300" style="display: block; border: 0;">
+  </div>
+  <h2 style="margin: 0 0 4px;">Welcome to Cyclops: {{ .ReportName }}</h2>
+{{- if not .GeneratedAt.IsZero }}
+  <p style="margin: 0 0 20px; color: #59636e; font-size: 13px;">Generated {{ .GeneratedAt.Format "2006-01-02 15:04 UTC" }}</p>
+{{- end }}
+
+  <p>This is a one-time message. It means cyclops is installed, and that it can send mail to this address.</p>
+
+  <p style="margin-bottom: 4px;"><strong>When you will hear from cyclops</strong></p>
+  <ul style="margin-top: 0; padding-left: 20px;">
+    <li>A certificate has never been issued.</li>
+    <li>A certificate has expired.</li>
+    <li>A certificate is more than an hour past the renewal time cert-manager set for it.</li>
+  </ul>
+  <p>If none of these applies, cyclops sends nothing, so a quiet inbox means every certificate is fine.</p>
+
+  <table style="border-collapse: collapse; font-size: 14px; margin-top: 16px;">
+    <tr>
+      <td style="padding: 4px 16px 4px 0; color: #59636e;">Report</td>
+      <td style="padding: 4px 0;">{{ .ReportName }}</td>
+    </tr>
+{{- if .Schedule }}
+    <tr>
+      <td style="padding: 4px 16px 4px 0; color: #59636e;">Checks run</td>
+      <td style="padding: 4px 0;"><code>{{ .Schedule }}</code> (UTC)</td>
+    </tr>
+{{- end }}
+    <tr style="vertical-align: top;">
+      <td style="padding: 4px 16px 4px 0; color: #59636e;">Covers</td>
+      <td style="padding: 4px 0;">
+        {{- if .Namespaces }}namespaces
+          {{- range $i, $n := .Namespaces }}{{ if $i }},{{ end }} {{ $n }}{{ end }}
+        {{- else }}every namespace, or the Ingresses annotated for this report{{ end -}}
+      </td>
+    </tr>
+  </table>
+
+  <p style="margin-top: 24px; color: #59636e; font-size: 12px;">Sent by <a href="https://github.com/sakshitposting-irl/cyclops" style="font-weight: bold; color: #800425;">Cyclops</a>.</p>{{/* Footer. Safe to edit or remove. */}}
+</body>
+</html>

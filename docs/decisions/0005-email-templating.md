@@ -76,6 +76,14 @@ data:
     </body></html>
 ```
 
+## Amendment: welcome template key
+Status: decided with ADR 0015.
+
+The one-time welcome email has its own built-in template. A custom one is read from the key
+`welcome.html` of the same ConfigMap that holds the report template (the `CertReport`'s
+`emailTemplateConfigMapRef`, else the chart-wide default). The key is optional: without it, or
+without any reference, the built-in welcome template is used. No `CertReport` field is added.
+
 ## Amendment: chart-wide default template
 Status: decided with the Helm chart ([ADR 0016](README.md), still open).
 

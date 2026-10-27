@@ -66,7 +66,8 @@
         "create": { "type": "boolean" },
         "useAsDefault": { "type": "boolean" },
         "name": { "type": "string" },
-        "content": { "type": "string" }
+        "content": { "type": "string" },
+        "welcomeContent": { "type": "string" }
       }
     },
     "reportServiceAccount": {

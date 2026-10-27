@@ -32,6 +32,11 @@ import (
 // report mode read it from there.
 const DefaultTemplateKey = "template.html"
 
+// WelcomeTemplateKey is the optional ConfigMap key of a custom welcome email template (ADR 0015
+// amendment). It lives in the same ConfigMap as the report template, so a ConfigMap without it
+// uses the built-in welcome template.
+const WelcomeTemplateKey = "welcome.html"
+
 //go:embed default.html.tmpl
 var defaultTemplateText string
 
@@ -51,6 +56,14 @@ func InlineImages(body string) []email.InlineImage {
 	}
 	return []email.InlineImage{{ContentID: logoContentID, ContentType: "image/png", Data: logoPNG}}
 }
+
+//go:embed default-welcome.html.tmpl
+var defaultWelcomeTemplateText string
+
+// DefaultWelcome is the built-in template for the one-time welcome email (ADR 0015). It is
+// separate from Default so the two can be restyled independently. Parsed once, at startup, like
+// Default.
+var DefaultWelcome = template.Must(Parse(defaultWelcomeTemplateText))
 
 // Default is the built-in template, used when a CertReport doesn't point at
 // a custom one (ADR 0005). It is parsed once, at startup; a broken default
@@ -87,6 +100,11 @@ func Render(t *template.Template, data TemplateData) (string, error) {
 // template (ADR 0013).
 func Subject(data TemplateData) string {
 	// TODO(adr0015): welcome variant of the subject, e.g. "[cyclops] Welcome: ...".
+
+	if data.Welcome {
+		return "[cyclops] Welcome! Let's get you started"
+	}
+
 	n := len(data.Findings)
 
 	if n == 0 {

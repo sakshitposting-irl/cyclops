@@ -37,7 +37,10 @@ type TemplateData struct {
 	// Findings are the certificates that need attention, most urgent first.
 	// May be empty.
 	Findings []Row
-	// TODO(adr0015): add Welcome bool, Schedule string, Namespaces []string (additive, ADR 0013).
+	// Bool that decides if welcome mail has to go; one per CertReport, stored in a configmap.
+	Welcome    bool
+	Schedule   string
+	Namespaces []string
 }
 
 // Row is one certificate in the report, flattened for templates.

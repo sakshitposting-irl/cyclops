@@ -1,5 +1,6 @@
 {{- /* Email template override (ADR 0005). A CertReport opts in with
-spec.emailTemplateConfigMapRef: {name: <this ConfigMap>, key: template.html}. */ -}}
+spec.emailTemplateConfigMapRef: {name: <this ConfigMap>, key: template.html}. The welcome email
+template (ADR 0015) is read from the key welcome.html of the same ConfigMap. */ -}}
 {{- if .Values.emailTemplate.create }}
 apiVersion: v1
 kind: ConfigMap
@@ -11,4 +12,6 @@ metadata:
 data:
   template.html: |
     {{- (default (.Files.Get "files/default.html.tmpl") .Values.emailTemplate.content) | nindent 4 }}
+  welcome.html: |
+    {{- (default (.Files.Get "files/default-welcome.html.tmpl") .Values.emailTemplate.welcomeContent) | nindent 4 }}
 {{- end }}

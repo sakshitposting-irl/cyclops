@@ -55,6 +55,16 @@ template built into the image until a `CertReport` references the ConfigMap. A `
 `files/default.html.tmpl` is a copy of `internal/render/default.html.tmpl`; `make helm-crd` re-syncs
 it (maintainers: do not edit it in the repo, edit the source).
 
+### The welcome email
+
+The one-time welcome email has its own template, [`files/default-welcome.html.tmpl`](files/default-welcome.html.tmpl),
+shipped in the same ConfigMap under the key `welcome.html`. It uses the same reference as the report
+template, so whichever ConfigMap a `CertReport` (or `useAsDefault`) points at supplies both. Change it
+with `--set-file emailTemplate.welcomeContent=welcome.html`, or by editing the file in your copy of
+the chart. A ConfigMap without a `welcome.html` key falls back to the built-in welcome template.
+The `TemplateValid` condition parses the key when it is there. The template's header comment lists
+its data (`.ReportName`, `.GeneratedAt`, `.Schedule`, `.Namespaces`, `.Findings`).
+
 ### What you can change
 
 **Nothing in the template is required.** The whole file is the email body, sent as a single
@@ -146,7 +156,7 @@ rejects bad combinations at `helm install`/`upgrade`: SMTP without a host, SES w
 | `email.smtp.*` | host required | `host`, `port` (default from `tls`), `tls` (`StartTLS`/`TLS`/`None`), `credentialsSecretName` |
 | `email.ses.*` | region required | `region`, `credentialsSecretName` (empty = ambient AWS identity) |
 | `reportServiceAccount.annotations` | `{}` | e.g. the IRSA role ARN |
-| `emailTemplate.create` / `.name` / `.content` | `true` / derived / shipped default | The template ConfigMap above |
+| `emailTemplate.create` / `.name` / `.content` / `.welcomeContent` | `true` / derived / shipped default / shipped default | The template ConfigMap above (`.welcomeContent` is the `welcome.html` key) |
 | `emailTemplate.useAsDefault` | `false` | Use that ConfigMap for every `CertReport` without its own reference |
 | `crd.enabled` / `crd.keep` | `true` / `true` | Install the CRD; keep it (and every `CertReport`) on uninstall |
 | `rbac.userRoles` | `true` | Admin/editor/viewer ClusterRoles for `CertReport` |

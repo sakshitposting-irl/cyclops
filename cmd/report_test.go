@@ -166,7 +166,7 @@ func newRunFixture(t *testing.T, withExpired bool, notifiers ...cyclopsv1alpha1.
 
 	cr := &cyclopsv1alpha1.CertReport{
 		ObjectMeta: metav1.ObjectMeta{Name: testReportName},
-		Spec:       cyclopsv1alpha1.CertReportSpec{Notifiers: notifiers},
+		Spec:       cyclopsv1alpha1.CertReportSpec{Schedule: "0 8 * * *", Notifiers: notifiers},
 	}
 	objs := []client.Object{cr, certificate("a", "fine", &healthy)}
 	if withExpired {
@@ -223,8 +223,28 @@ func TestGenerateReport(t *testing.T) {
 		if err := f.run(true); err != nil {
 			t.Fatalf("generateReport() error = %v", err)
 		}
-		if len(f.sender.sent) != 1 || f.sender.sent[0].Subject != "[cyclops] All certificates healthy" {
-			t.Fatalf("sent %+v, want one all-healthy message", f.sender.sent)
+		if len(f.sender.sent) != 1 || f.sender.sent[0].Subject != "[cyclops] Welcome! Let's get you started" {
+			t.Fatalf("sent %+v, want one welcome message", f.sender.sent)
+		}
+	})
+
+	t.Run("the welcome email has its own template: schedule and namespaces, and no findings", func(t *testing.T) {
+		f := newRunFixture(t, true, emailNotifier("to@example.com")) // an expired certificate exists
+		if err := f.run(true); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 {
+			t.Fatalf("sent %d messages, want 1", len(f.sender.sent))
+		}
+		body := f.sender.sent[0].HTMLBody
+		if !strings.Contains(body, "Welcome to Cyclops") || !strings.Contains(body, "0 8 * * *") {
+			t.Fatalf("not the welcome template, or the schedule is missing:\n%s", body)
+		}
+		if strings.Contains(body, "old-cert") {
+			t.Fatalf("the welcome email must not list findings:\n%s", body)
+		}
+		if len(f.sender.sent[0].Inline) != 1 {
+			t.Fatalf("want the logo attached, got %d inline images", len(f.sender.sent[0].Inline))
 		}
 	})
 
@@ -378,6 +398,83 @@ func TestLoadTemplate(t *testing.T) {
 	}
 }
 
+func TestLoadWelcomeTemplate(t *testing.T) {
+	s, err := newReportScheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		withWelcomeCM = "with-welcome"
+		badWelcomeCM  = "bad-welcome"
+	)
+	cmWith := func(name string, data map[string]string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testCyclopsNS}, Data: data}
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		cmWith(tmplCM, map[string]string{keyGood: "report for {{ .ReportName }}"}), // no welcome key
+		cmWith(withWelcomeCM, map[string]string{
+			keyGood:                   "report for {{ .ReportName }}",
+			render.WelcomeTemplateKey: "welcome for {{ .ReportName }}",
+		}),
+		cmWith(badWelcomeCM, map[string]string{keyGood: "ok", render.WelcomeTemplateKey: "{{ .ReportName "}),
+	).Build()
+
+	reportWith := func(name string) *cyclopsv1alpha1.CertReport {
+		cr := &cyclopsv1alpha1.CertReport{ObjectMeta: metav1.ObjectMeta{Name: testReportName}}
+		if name != "" {
+			cr.Spec.EmailTemplateConfigMapRef = &cyclopsv1alpha1.TemplateConfigMapRef{Name: name, Key: keyGood}
+		}
+		return cr
+	}
+	ctx := context.Background()
+
+	t.Run("no reference uses the built-in welcome template", func(t *testing.T) {
+		got, err := loadWelcomeTemplate(ctx, c, reportWith(""), testCyclopsNS, "")
+		if err != nil || got != render.DefaultWelcome {
+			t.Fatalf("got %v, %v; want render.DefaultWelcome", got, err)
+		}
+	})
+
+	t.Run("a ConfigMap without the welcome key falls back to the built-in one", func(t *testing.T) {
+		got, err := loadWelcomeTemplate(ctx, c, reportWith(tmplCM), testCyclopsNS, "")
+		if err != nil || got != render.DefaultWelcome {
+			t.Fatalf("got %v, %v; want render.DefaultWelcome", got, err)
+		}
+	})
+
+	t.Run("the welcome key is read from the same ConfigMap and parsed", func(t *testing.T) {
+		got, err := loadWelcomeTemplate(ctx, c, reportWith(withWelcomeCM), testCyclopsNS, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := render.Render(got, render.TemplateData{ReportName: testReportName})
+		if err != nil || body != "welcome for "+testReportName {
+			t.Fatalf("body = %q, err = %v", body, err)
+		}
+	})
+
+	t.Run("the chart-wide default ConfigMap supplies the welcome template too", func(t *testing.T) {
+		got, err := loadWelcomeTemplate(ctx, c, reportWith(""), testCyclopsNS, withWelcomeCM)
+		if err != nil || got == render.DefaultWelcome {
+			t.Fatalf("got %v, %v; want the custom welcome template", got, err)
+		}
+	})
+
+	t.Run("a welcome template that does not parse fails the run", func(t *testing.T) {
+		_, err := loadWelcomeTemplate(ctx, c, reportWith(badWelcomeCM), testCyclopsNS, "")
+		if err == nil || !strings.Contains(err.Error(), render.WelcomeTemplateKey) {
+			t.Fatalf("error = %v, want one naming %q", err, render.WelcomeTemplateKey)
+		}
+	})
+
+	t.Run("a missing ConfigMap fails the run, as for the report", func(t *testing.T) {
+		_, err := loadWelcomeTemplate(ctx, c, reportWith("nope"), testCyclopsNS, "")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("error = %v, want not found", err)
+		}
+	})
+}
+
 func TestRenderReport(t *testing.T) {
 	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
 	expired := now.Add(-24 * time.Hour)
@@ -387,7 +484,7 @@ func TestRenderReport(t *testing.T) {
 	}}
 
 	t.Run("the built-in template lists the findings", func(t *testing.T) {
-		subject, body, err := renderReport(render.Default, testReportName, now, findings)
+		subject, body, err := renderReport(render.Default, render.NewTemplateData(testReportName, now, findings))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,7 +501,7 @@ func TestRenderReport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, body, err := renderReport(tmpl, testReportName, now, findings)
+		_, body, err := renderReport(tmpl, render.NewTemplateData(testReportName, now, findings))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +515,7 @@ func TestRenderReport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err) // parses fine: the typo only shows up when it runs
 		}
-		subject, body, err := renderReport(tmpl, testReportName, now, findings)
+		subject, body, err := renderReport(tmpl, render.NewTemplateData(testReportName, now, findings))
 		if err == nil {
 			t.Fatal("want an error for the unknown field")
 		}

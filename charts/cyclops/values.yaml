@@ -39,6 +39,7 @@ emailTemplate:
   useAsDefault: false
   name: "" # defaults to <fullname>-email-template
   content: "" # empty = the shipped default
+  welcomeContent: "" # the welcome email template (key welcome.html); empty = the shipped default
 
 # The ServiceAccount the report Pods run as (ADR 0014, decision 6).
 reportServiceAccount:

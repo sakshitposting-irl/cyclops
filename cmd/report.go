@@ -178,8 +178,9 @@ func runReport(ctx context.Context, args []string) error {
 // A failure at any step returns an error, so the Job fails and Kubernetes records the run as
 // failed.
 //
-// TODO(adr0015): set Welcome, Schedule and Namespaces on the template data when --welcome
-// (policy text plus current findings). Adding them is additive (ADR 0013).
+// With --welcome the run uses the welcome template instead (ADR 0015) and sets Welcome, Schedule
+// and Namespaces on the template data. Findings stays truthful, but the built-in welcome template
+// does not show it.
 func generateReport(
 	ctx context.Context, c client.Reader, newSender senderFactory, opts reportOptions, now time.Time,
 ) error {
@@ -213,11 +214,19 @@ func generateReport(
 
 	// The template is loaded after the early exit, so a quiet day never reads the ConfigMap. A
 	// bad custom template fails the run here, before anything is sent.
-	tmpl, err := loadTemplate(ctx, c, &cr, opts.Namespace, opts.DefaultTemplateConfigMap)
+	load := loadTemplate
+	data := render.NewTemplateData(cr.Name, now, findings)
+	if opts.Welcome {
+		load = loadWelcomeTemplate
+		data.Welcome = true
+		data.Schedule = cr.Spec.Schedule
+		data.Namespaces = cr.Spec.Namespaces
+	}
+	tmpl, err := load(ctx, c, &cr, opts.Namespace, opts.DefaultTemplateConfigMap)
 	if err != nil {
 		return err
 	}
-	subject, body, err := renderReport(tmpl, cr.Name, now, findings)
+	subject, body, err := renderReport(tmpl, data)
 	if err != nil {
 		return err
 	}
@@ -267,10 +276,7 @@ func sendToNotifiers(
 // in code and the body comes from tmpl (ADR 0013). A template that fails to run, for example
 // one naming a field that does not exist, returns an error and no body, so a broken template
 // never sends half an email.
-func renderReport(
-	tmpl *template.Template, reportName string, now time.Time, findings []report.Finding,
-) (subject, body string, err error) {
-	data := render.NewTemplateData(reportName, now, findings)
+func renderReport(tmpl *template.Template, data render.TemplateData) (subject, body string, err error) {
 	body, err = render.Render(tmpl, data)
 	if err != nil {
 		return "", "", fmt.Errorf("rendering the report: %w", err)
@@ -289,20 +295,14 @@ func renderReport(
 func loadTemplate(
 	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, namespace, defaultConfigMap string,
 ) (*template.Template, error) {
-	ref := cr.Spec.EmailTemplateConfigMapRef
-	if ref == nil && defaultConfigMap != "" {
-		ref = &cyclopsv1alpha1.TemplateConfigMapRef{Name: defaultConfigMap, Key: defaultTemplateKey}
-	}
+	ref := templateRef(cr, defaultConfigMap)
 	if ref == nil {
 		return render.Default, nil
 	}
 
-	var cm corev1.ConfigMap
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ref.Name}, &cm); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("template ConfigMap %s/%s not found", namespace, ref.Name)
-		}
-		return nil, fmt.Errorf("reading template ConfigMap %s/%s: %w", namespace, ref.Name, err)
+	cm, err := getTemplateConfigMap(ctx, c, namespace, ref.Name)
+	if err != nil {
+		return nil, err
 	}
 	text, ok := cm.Data[ref.Key]
 	if !ok {
@@ -313,6 +313,57 @@ func loadTemplate(
 		return nil, fmt.Errorf("parsing template %s/%s key %q: %w", namespace, ref.Name, ref.Key, err)
 	}
 	return tmpl, nil
+}
+
+// loadWelcomeTemplate returns the welcome email template for cr (ADR 0015 amendment). It looks
+// in the same ConfigMap as the report template, under render.WelcomeTemplateKey, and uses the
+// built-in welcome template when there is no ConfigMap reference or the ConfigMap has no such
+// key. A missing ConfigMap or a template that does not parse is an error, as for the report.
+func loadWelcomeTemplate(
+	ctx context.Context, c client.Reader, cr *cyclopsv1alpha1.CertReport, namespace, defaultConfigMap string,
+) (*template.Template, error) {
+	ref := templateRef(cr, defaultConfigMap)
+	if ref == nil {
+		return render.DefaultWelcome, nil
+	}
+
+	cm, err := getTemplateConfigMap(ctx, c, namespace, ref.Name)
+	if err != nil {
+		return nil, err
+	}
+	text, ok := cm.Data[render.WelcomeTemplateKey]
+	if !ok {
+		return render.DefaultWelcome, nil
+	}
+	tmpl, err := render.Parse(text)
+	if err != nil {
+		return nil, fmt.Errorf("parsing template %s/%s key %q: %w", namespace, ref.Name, render.WelcomeTemplateKey, err)
+	}
+	return tmpl, nil
+}
+
+// templateRef is the ConfigMap key cr's email is rendered from: its own reference, else the
+// chart-wide default ConfigMap, else nil for the built-in templates.
+func templateRef(cr *cyclopsv1alpha1.CertReport, defaultConfigMap string) *cyclopsv1alpha1.TemplateConfigMapRef {
+	if ref := cr.Spec.EmailTemplateConfigMapRef; ref != nil {
+		return ref
+	}
+	if defaultConfigMap != "" {
+		return &cyclopsv1alpha1.TemplateConfigMapRef{Name: defaultConfigMap, Key: defaultTemplateKey}
+	}
+	return nil
+}
+
+// getTemplateConfigMap reads the template ConfigMap name in namespace.
+func getTemplateConfigMap(ctx context.Context, c client.Reader, namespace, name string) (*corev1.ConfigMap, error) {
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("template ConfigMap %s/%s not found", namespace, name)
+		}
+		return nil, fmt.Errorf("reading template ConfigMap %s/%s: %w", namespace, name, err)
+	}
+	return &cm, nil
 }
 
 // findCertificates reads the certificates in namespaces (empty means all, ADR 0010) and

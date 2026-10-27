@@ -388,7 +388,8 @@ func (r *CertReportReconciler) templateRef(cr *cyclopsv1alpha1.CertReport) *cycl
 
 // templateCondition reports whether the template cr will be rendered with can be loaded and
 // parsed (ADR 0018, question 7). It covers a missing ConfigMap, a missing key and a syntax
-// error, and nothing more: a field name that does not exist, such as {{ .Findngs }}, only fails
+// error, in the report template and, when the ConfigMap has one, the welcome template (render.
+// WelcomeTemplateKey, ADR 0015 amendment), and nothing more: a field name that does not exist, such as {{ .Findngs }}, only fails
 // when the template runs. With no custom or default template the built-in one is used and
 // there is nothing to check.
 func (r *CertReportReconciler) templateCondition(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (metav1.Condition, error) {
@@ -426,9 +427,21 @@ func (r *CertReportReconciler) templateCondition(ctx context.Context, cr *cyclop
 		cond.Message = fmt.Sprintf("template %s/%s key %q does not parse: %v", r.Namespace, ref.Name, ref.Key, err)
 		return cond, nil
 	}
+	// The welcome template is optional: a ConfigMap without the key uses the built-in one.
+	welcome := ""
+	if wtext, ok := cm.Data[render.WelcomeTemplateKey]; ok {
+		if _, err := render.Parse(wtext); err != nil {
+			cond.Status = metav1.ConditionFalse
+			cond.Reason = "ParseError"
+			cond.Message = fmt.Sprintf("template %s/%s key %q does not parse: %v",
+				r.Namespace, ref.Name, render.WelcomeTemplateKey, err)
+			return cond, nil
+		}
+		welcome = fmt.Sprintf(" and key %q", render.WelcomeTemplateKey)
+	}
 	cond.Status = metav1.ConditionTrue
 	cond.Reason = "Valid"
-	cond.Message = fmt.Sprintf("template %s/%s key %q parses", r.Namespace, ref.Name, ref.Key)
+	cond.Message = fmt.Sprintf("template %s/%s key %q%s parses", r.Namespace, ref.Name, ref.Key, welcome)
 	return cond, nil
 }
 

@@ -1,4 +1,5 @@
-<h1 align="center"><img src="docs/assets/logo.png" alt="cyclops: keeps an eye on your certificates" width="440"></h1>
+<h1 align="center"><img src="docs/assets/hero.png" alt="cyclops: keeps an eye on your certificates" width="720"></h1>
+<p align="center"><sub>The one-time welcome email (planned), rendered from the built-in template with sample data.</sub></p>
 
 A backstop for [cert-manager](https://cert-manager.io): a daily report of certificates that are
 expired, never issued, or overdue for renewal, so a silently failing renewal gets noticed before it
@@ -40,8 +41,8 @@ flowchart LR
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
    `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
    to each notifier (only `Email` exists today). If there are none, it sends nothing.
-4. Planned: when a `CertReport` is first created, cyclops sends a one-time welcome message with the
-   current findings. This also checks that delivery works.
+4. Planned: when a `CertReport` is first created, cyclops sends a one-time welcome message that
+   explains when cyclops emails you. This also checks that delivery works.
 
 For certificates that are due, the report also shows cert-manager's own diagnostics (failed
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
