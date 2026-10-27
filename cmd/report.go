@@ -178,9 +178,8 @@ func runReport(ctx context.Context, args []string) error {
 // A failure at any step returns an error, so the Job fails and Kubernetes records the run as
 // failed.
 //
-// TODO(adr0015): render.TemplateData has no field yet to tell the template this is the
-// welcome run (policy text plus current findings). Adding one is additive (ADR 0013), but it
-// belongs to the welcome-email work.
+// TODO(adr0015): set Welcome, Schedule and Namespaces on the template data when --welcome
+// (policy text plus current findings). Adding them is additive (ADR 0013).
 func generateReport(
 	ctx context.Context, c client.Reader, newSender senderFactory, opts reportOptions, now time.Time,
 ) error {
@@ -246,7 +245,10 @@ func sendToNotifiers(
 	for i, n := range notifiers {
 		switch {
 		case n.Type == cyclopsv1alpha1.NotifierTypeEmail && n.Email != nil:
-			msg := email.Message{From: n.Email.From, To: n.Email.To, Subject: subject, HTMLBody: body}
+			msg := email.Message{
+				From: n.Email.From, To: n.Email.To, Subject: subject, HTMLBody: body,
+				Inline: render.InlineImages(body),
+			}
 			if err := sender.Send(ctx, msg); err != nil {
 				errs = append(errs, fmt.Errorf("notifier %d (Email to %s): %w", i, strings.Join(n.Email.To, ", "), err))
 				continue

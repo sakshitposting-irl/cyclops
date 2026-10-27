@@ -41,6 +41,18 @@ type Message struct {
 	Subject string
 	// HTMLBody is the rendered template.
 	HTMLBody string
+	// Inline are images the HTML body refers to as <img src="cid:ContentID">. They travel
+	// inside the message, so the client makes no remote fetch. May be empty.
+	Inline []InlineImage
+}
+
+// InlineImage is one image embedded in a Message.
+type InlineImage struct {
+	// ContentID is what follows "cid:" in the HTML, without angle brackets.
+	ContentID string
+	// ContentType is the MIME type, e.g. "image/png".
+	ContentType string
+	Data        []byte
 }
 
 // Sender delivers a Message. Implementations: SMTP and SES.
@@ -61,6 +73,15 @@ type parsedMessage struct {
 func parse(msg Message) (parsedMessage, error) {
 	if strings.ContainsAny(msg.Subject, escapeChar) {
 		return parsedMessage{}, errors.New("email: subject contains CR or LF")
+	}
+	// ContentID and ContentType end up in MIME headers, so they get the same CR/LF check.
+	for _, img := range msg.Inline {
+		if img.ContentID == "" || img.ContentType == "" {
+			return parsedMessage{}, errors.New("email: inline image needs a ContentID and ContentType")
+		}
+		if strings.ContainsAny(img.ContentID+img.ContentType, escapeChar) {
+			return parsedMessage{}, errors.New("email: inline image header contains CR or LF")
+		}
 	}
 	mailFrom, err := parseAddress(msg.From)
 	if err != nil {

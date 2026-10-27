@@ -96,6 +96,21 @@ func (s *SES) Send(ctx context.Context, msg Message) error {
 		to[i] = addr.Address
 	}
 
+	// SES builds the MIME message itself: inline images go in as INLINE attachments, which the
+	// HTML refers to by ContentId ("cid:"). nil when there are none, so nothing is sent for them.
+	var attachments []types.Attachment
+	for _, img := range pm.Inline {
+		attachments = append(attachments, types.Attachment{
+			// SES requires a file name; the ContentID is the only name the image has.
+			FileName:                aws.String(img.ContentID),
+			RawContent:              img.Data, // the SDK base64-encodes it for us
+			ContentId:               aws.String(img.ContentID),
+			ContentType:             aws.String(img.ContentType),
+			ContentDisposition:      types.AttachmentContentDispositionInline,
+			ContentTransferEncoding: types.AttachmentContentTransferEncodingBase64,
+		})
+	}
+
 	_, err = s.client.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: aws.String(pm.from.Address),
 		Destination:      &types.Destination{ToAddresses: to},
@@ -105,6 +120,7 @@ func (s *SES) Send(ctx context.Context, msg Message) error {
 				Body: &types.Body{
 					Html: &types.Content{Data: aws.String(pm.HTMLBody), Charset: aws.String(charsetUTF8)},
 				},
+				Attachments: attachments,
 			},
 		},
 	})

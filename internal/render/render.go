@@ -22,6 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"strings"
+
+	"github.com/sakshitposting-irl/cyclops/internal/email"
 )
 
 // DefaultTemplateKey is the ConfigMap key of the chart-wide default template (ADR 0005
@@ -31,6 +34,23 @@ const DefaultTemplateKey = "template.html"
 
 //go:embed default.html.tmpl
 var defaultTemplateText string
+
+//go:embed logo.png
+var logoPNG []byte
+
+// logoContentID is the Content-ID of the logo: the default template refers to it as
+// <img src="cid:cyclops-logo">.
+const logoContentID = "cyclops-logo"
+
+// InlineImages returns the images a rendered body refers to by "cid:", for email.Message.Inline.
+// Today that is only the logo, and only when the body uses it, so a custom template without
+// the logo is sent without the attachment.
+func InlineImages(body string) []email.InlineImage {
+	if !strings.Contains(body, "cid:"+logoContentID) {
+		return nil
+	}
+	return []email.InlineImage{{ContentID: logoContentID, ContentType: "image/png", Data: logoPNG}}
+}
 
 // Default is the built-in template, used when a CertReport doesn't point at
 // a custom one (ADR 0005). It is parsed once, at startup; a broken default
@@ -66,6 +86,7 @@ func Render(t *template.Template, data TemplateData) (string, error) {
 // Subject is the email's subject line, set in code rather than by the
 // template (ADR 0013).
 func Subject(data TemplateData) string {
+	// TODO(adr0015): welcome variant of the subject, e.g. "[cyclops] Welcome: ...".
 	n := len(data.Findings)
 
 	if n == 0 {

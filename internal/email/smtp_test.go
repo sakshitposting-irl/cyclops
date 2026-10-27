@@ -17,11 +17,13 @@ limitations under the License.
 package email
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"io"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
 	"slices"
@@ -358,6 +360,101 @@ func TestBuildMIME(t *testing.T) {
 	body, err := io.ReadAll(quotedprintable.NewReader(m.Body))
 	if err != nil || string(body) != msg.HTMLBody {
 		t.Errorf("body doesn't round-trip (%v)", err)
+	}
+}
+
+func TestBuildMIMEInline(t *testing.T) {
+	msg := testMessage()
+	// Non-ASCII and a line over SMTP's 998-byte limit, as in TestBuildMIME. No newline: the
+	// quoted-printable writer turns "\n" into "\r\n", which would not round-trip byte for byte.
+	msg.HTMLBody = `<img src="cid:one"><img src="cid:two"><p>läuft ab ` + strings.Repeat("x", 2000) + "</p>"
+	images := []InlineImage{
+		// 160 bytes encode to more than 76 base64 characters, so this one has to be wrapped.
+		{ContentID: "one", ContentType: "image/png", Data: bytes.Repeat([]byte{0x89, 'P', 'N', 'G'}, 40)},
+		{ContentID: "two", ContentType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
+	}
+	msg.Inline = images
+
+	pm, err := parse(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := buildMIME(pm, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for line := range strings.SplitSeq(string(b), "\r\n") {
+		if len(line) > 998 {
+			t.Fatalf("line of %d bytes exceeds SMTP's limit", len(line))
+		}
+	}
+
+	m, err := mail.ReadMessage(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The plain path's header must not be written as well.
+	if n := len(m.Header["Content-Type"]); n != 1 {
+		t.Fatalf("%d Content-Type headers, want 1", n)
+	}
+	mediaType, params, err := mime.ParseMediaType(m.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaType != "multipart/related" || params["type"] != "text/html" || params["boundary"] == "" {
+		t.Fatalf("Content-Type = %q %v, want multipart/related with type text/html and a boundary", mediaType, params)
+	}
+
+	mr := multipart.NewReader(m.Body, params["boundary"])
+	htmlPart, err := mr.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := htmlPart.Header.Get("Content-Type"); got != `text/html; charset="UTF-8"` {
+		t.Errorf("first part Content-Type = %q, want the HTML", got)
+	}
+	// multipart.Reader decodes quoted-printable itself, so the part reads back as the original.
+	html, err := io.ReadAll(htmlPart)
+	if err != nil || string(html) != msg.HTMLBody {
+		t.Errorf("HTML part doesn't round-trip (%v)", err)
+	}
+
+	for _, want := range images {
+		part, err := mr.NextPart()
+		if err != nil {
+			t.Fatalf("part for %q: %v", want.ContentID, err)
+		}
+		if got := part.Header.Get("Content-ID"); got != "<"+want.ContentID+">" {
+			t.Errorf("Content-ID = %q, want <%s>", got, want.ContentID)
+		}
+		if got := part.Header.Get("Content-Type"); got != want.ContentType {
+			t.Errorf("%s Content-Type = %q, want %q", want.ContentID, got, want.ContentType)
+		}
+		if got := part.Header.Get("Content-Disposition"); got != "inline" {
+			t.Errorf("%s Content-Disposition = %q, want inline", want.ContentID, got)
+		}
+		encoded, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for line := range strings.SplitSeq(string(encoded), "\r\n") {
+			if len(line) > 76 {
+				t.Errorf("%s: base64 line of %d characters, want at most 76", want.ContentID, len(line))
+			}
+		}
+		got, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(string(encoded), "\r\n", ""))
+		if err != nil || !bytes.Equal(got, want.Data) {
+			t.Errorf("%s doesn't round-trip (%v)", want.ContentID, err)
+		}
+	}
+	if _, err := mr.NextPart(); err != io.EOF {
+		t.Errorf("another part after the images, or a missing closing boundary: %v", err)
+	}
+	// Readers ignore anything after the closing boundary, so check the message ends there:
+	// falling through to the plain path would append a second Content-Type and body.
+	if closing := "\r\n--" + params["boundary"] + "--\r\n"; !strings.HasSuffix(string(b), closing) {
+		t.Errorf("message doesn't end with the closing boundary; ends with %q", string(b[max(0, len(b)-60):]))
 	}
 }
 

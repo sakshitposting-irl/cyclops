@@ -37,6 +37,7 @@ type TemplateData struct {
 	// Findings are the certificates that need attention, most urgent first.
 	// May be empty.
 	Findings []Row
+	// TODO(adr0015): add Welcome bool, Schedule string, Namespaces []string (additive, ADR 0013).
 }
 
 // Row is one certificate in the report, flattened for templates.

@@ -22,12 +22,15 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -282,6 +285,12 @@ func buildMIME(pm parsedMessage, now time.Time) ([]byte, error) {
 	mimeBuffer.WriteString("\r\n")
 
 	mimeBuffer.WriteString("MIME-Version: 1.0\r\n")
+	if len(pm.Inline) > 0 {
+		if err := writeRelated(mimeBuffer, pm); err != nil {
+			return nil, err
+		}
+		return mimeBuffer.Bytes(), nil
+	}
 	mimeBuffer.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
 	mimeBuffer.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
 	mimeBuffer.WriteString("\r\n")
@@ -298,6 +307,55 @@ func buildMIME(pm parsedMessage, now time.Time) ([]byte, error) {
 	}
 
 	return mimeBuffer.Bytes(), nil
+}
+
+// writeRelated writes the Content-Type header and the body of a multipart/related message:
+// the HTML part first, then one base64 part per inline image, each tied to the HTML by its
+// Content-ID (the "cid:" in the markup).
+func writeRelated(buf *bytes.Buffer, pm parsedMessage) error {
+	mw := multipart.NewWriter(buf)
+	buf.WriteString("Content-Type: multipart/related; type=\"text/html\"; boundary=\"")
+	buf.WriteString(mw.Boundary())
+	buf.WriteString("\"\r\n\r\n")
+
+	htmlPart, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {"text/html; charset=\"UTF-8\""},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
+		return err
+	}
+	qp := quotedprintable.NewWriter(htmlPart)
+	if _, err := qp.Write([]byte(pm.HTMLBody)); err != nil {
+		return err
+	}
+	if err := qp.Close(); err != nil {
+		return err
+	}
+
+	for _, img := range pm.Inline {
+		part, err := mw.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {img.ContentType},
+			"Content-Transfer-Encoding": {"base64"},
+			"Content-ID":                {"<" + img.ContentID + ">"},
+			"Content-Disposition":       {"inline"},
+		})
+		if err != nil {
+			return err
+		}
+		// RFC 2045: base64 lines are at most 76 characters.
+		encoded := base64.StdEncoding.EncodeToString(img.Data)
+		for len(encoded) > 76 {
+			if _, err := part.Write([]byte(encoded[:76] + "\r\n")); err != nil {
+				return err
+			}
+			encoded = encoded[76:]
+		}
+		if _, err := part.Write([]byte(encoded)); err != nil {
+			return err
+		}
+	}
+	return mw.Close()
 }
 
 // messageID returns a random Message-ID in the sender's domain. Some spam

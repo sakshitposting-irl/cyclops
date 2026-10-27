@@ -209,3 +209,30 @@ func TestParseFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestParseInline(t *testing.T) {
+	tests := []struct {
+		name    string
+		img     InlineImage
+		wantErr bool
+	}{
+		{name: "valid", img: InlineImage{ContentID: "cyclops-logo", ContentType: "image/png", Data: []byte("x")}},
+		{name: "empty ContentID", img: InlineImage{ContentType: "image/png"}, wantErr: true},
+		{name: "empty ContentType", img: InlineImage{ContentID: "cyclops-logo"}, wantErr: true},
+		{name: "CRLF in ContentID", img: InlineImage{ContentID: "a\r\nBcc: evil@example.com", ContentType: "image/png"}, wantErr: true},
+		{name: "bare LF in ContentType", img: InlineImage{ContentID: "cyclops-logo", ContentType: "image/png\nBcc: evil@example.com"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := testMessage()
+			msg.Inline = []InlineImage{tt.img}
+			_, err := parse(msg)
+			if tt.wantErr && err == nil {
+				t.Fatalf("parse() accepted inline image %+v", tt.img)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("parse() rejected inline image %+v: %v", tt.img, err)
+			}
+		})
+	}
+}

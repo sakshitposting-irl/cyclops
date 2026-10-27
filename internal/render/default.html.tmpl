@@ -25,6 +25,9 @@
   <meta charset="utf-8">
 </head>
 <body style="font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #1f2328; margin: 0; padding: 24px;">
+  <div style="background: #0c0e0d; margin: -24px -24px 20px; padding: 16px 24px;">{{/* Header band: the logo is attached to the email by cyclops (cid:cyclops-logo). Delete the div to drop it. */}}
+    <img src="cid:cyclops-logo" alt="cyclops" width="300" style="display: block; border: 0;">
+  </div>
   <h2 style="margin: 0 0 4px;">Daily Certificate Report: {{ .ReportName }}</h2>
 {{- if not .GeneratedAt.IsZero }}
   <p style="margin: 0 0 20px; color: #59636e; font-size: 13px;">Generated {{ .GeneratedAt.Format "2006-01-02 15:04 UTC" }}</p>

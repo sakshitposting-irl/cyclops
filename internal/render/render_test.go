@@ -262,3 +262,22 @@ func TestSubject(t *testing.T) {
 		}
 	}
 }
+
+func TestInlineImages(t *testing.T) {
+	body, err := Render(Default, TemplateData{ReportName: testReport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := InlineImages(body)
+	if len(got) != 1 || got[0].ContentID != "cyclops-logo" || got[0].ContentType != "image/png" {
+		t.Fatalf("default body should attach the logo, got %+v", got)
+	}
+	// The embedded file really is a PNG, so a bad copy can't ship a broken image.
+	if !strings.HasPrefix(string(got[0].Data), "\x89PNG") {
+		t.Errorf("logo data is not a PNG")
+	}
+
+	if got := InlineImages("<p>custom template without the logo</p>"); got != nil {
+		t.Errorf("a body that doesn't use the logo should attach nothing, got %+v", got)
+	}
+}
