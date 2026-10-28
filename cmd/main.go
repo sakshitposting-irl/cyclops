@@ -230,11 +230,12 @@ func run(ctx context.Context, args []string) error {
 		HealthProbeBindAddress: probeAddr,
 		// The manager only needs the objects it owns in its own namespace (ADR 0014), so
 		// the cache is limited there. This is what lets RBAC for them be a namespaced Role.
-		// The cache keeps every CronJob, Secret and ConfigMap in that namespace in the controller's
+		// The cache keeps every CronJob, Job, Secret and ConfigMap in that namespace in the controller's
 		// memory: one list, then a watch to keep it current. Get and List read from it instead of
 		// calling the API server; writes still go to the API server.
 		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
 			&batchv1.CronJob{}:  {Namespaces: map[string]cache.Config{namespace: {}}},
+			&batchv1.Job{}:      {Namespaces: map[string]cache.Config{namespace: {}}},
 			&corev1.Secret{}:    {Namespaces: map[string]cache.Config{namespace: {}}},
 			&corev1.ConfigMap{}: {Namespaces: map[string]cache.Config{namespace: {}}},
 		}},
