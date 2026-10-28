@@ -23,6 +23,7 @@ import (
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -67,6 +68,16 @@ func certificate() *cmapi.Certificate {
 
 func request(name, uid string, created time.Time, owner metav1.Object) cmapi.CertificateRequest {
 	return cmapi.CertificateRequest{ObjectMeta: meta(name, uid, created, owner)}
+}
+
+// notReady returns req with a Ready=False condition, as cert-manager sets on a
+// request that is waiting on, or refused by, its issuer.
+func notReady(req cmapi.CertificateRequest, reason, message string) cmapi.CertificateRequest {
+	req.Status.Conditions = []cmapi.CertificateRequestCondition{{
+		Type: cmapi.CertificateRequestConditionReady, Status: cmmeta.ConditionFalse,
+		Reason: reason, Message: message,
+	}}
+	return req
 }
 
 func order(name, uid string, owner metav1.Object, state acmev1.State, reason string) acmev1.Order {
@@ -126,6 +137,31 @@ func TestToCertStatus(t *testing.T) {
 			name: "request without order: no diagnostics",
 			reqs: []cmapi.CertificateRequest{req},
 			want: base(),
+		},
+		{
+			// A CA issuer whose Secret is missing: cert-manager never fails the
+			// request, it just waits (ADR 0021).
+			name: "request without order, not ready: the request's reason and message",
+			reqs: []cmapi.CertificateRequest{notReady(req, "Pending", "Referenced issuer does not have a Ready status condition")},
+			want: withDiag("Pending", "Referenced issuer does not have a Ready status condition"),
+		},
+		{
+			name: "request without order, ready: no diagnostics",
+			reqs: func() []cmapi.CertificateRequest {
+				ready := req
+				ready.Status.Conditions = []cmapi.CertificateRequestCondition{{
+					Type: cmapi.CertificateRequestConditionReady, Status: cmmeta.ConditionTrue, Reason: "Issued",
+				}}
+				return []cmapi.CertificateRequest{ready}
+			}(),
+			want: base(),
+		},
+		{
+			// With an Order, the ACME diagnostics are more specific than the request's.
+			name:   "order wins over the request's condition",
+			reqs:   []cmapi.CertificateRequest{notReady(req, "Pending", "Waiting on certificate issuance from order")},
+			orders: []acmev1.Order{order("web-1-order", "order-uid", &req, acmev1.Invalid, "order failed")},
+			want:   withDiag("invalid", "order failed"),
 		},
 		{
 			name:   "order not valid, no challenges: order's state and reason",
@@ -197,6 +233,101 @@ func TestToCertStatus(t *testing.T) {
 			got := ToCertStatus(cert, tt.reqs, tt.orders, tt.chals)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ToCertStatus() =\n  %+v\nwant\n  %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIssuerError(t *testing.T) {
+	issuer := func(ns, name string, status cmmeta.ConditionStatus, reason, msg string) cmapi.Issuer {
+		return cmapi.Issuer{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Status: cmapi.IssuerStatus{Conditions: []cmapi.IssuerCondition{{
+				Type: cmapi.IssuerConditionReady, Status: status, Reason: reason, Message: msg,
+			}}},
+		}
+	}
+	clusterIssuer := func(name string, status cmmeta.ConditionStatus, reason, msg string) cmapi.ClusterIssuer {
+		return cmapi.ClusterIssuer{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: cmapi.IssuerStatus{Conditions: []cmapi.IssuerCondition{{
+				Type: cmapi.IssuerConditionReady, Status: status, Reason: reason, Message: msg,
+			}}},
+		}
+	}
+	const (
+		ca    = "ca"
+		other = "other"
+		nope  = "secrets \"nope\" not found"
+	)
+
+	tests := []struct {
+		name           string
+		ref            cmmeta.IssuerReference // an empty Name is filled in with "ca"
+		issuers        []cmapi.Issuer
+		clusterIssuers []cmapi.ClusterIssuer
+		want           string
+	}{
+		{
+			name:    "issuer not ready: kind, name, reason and message",
+			ref:     cmmeta.IssuerReference{Kind: "Issuer"},
+			issuers: []cmapi.Issuer{issuer(testNamespace, ca, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+			want:    "Issuer ca: ErrGetKeyPair: " + nope,
+		},
+		{
+			name:    "kind defaults to Issuer",
+			issuers: []cmapi.Issuer{issuer(testNamespace, ca, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+			want:    "Issuer ca: ErrGetKeyPair: " + nope,
+		},
+		{
+			name:           "cluster issuer not ready",
+			ref:            cmmeta.IssuerReference{Kind: "ClusterIssuer"},
+			clusterIssuers: []cmapi.ClusterIssuer{clusterIssuer(ca, cmmeta.ConditionFalse, "ErrRegisterACMEAccount", "bad email")},
+			want:           "ClusterIssuer ca: ErrRegisterACMEAccount: bad email",
+		},
+		{
+			name:    "issuer ready",
+			issuers: []cmapi.Issuer{issuer(testNamespace, ca, cmmeta.ConditionTrue, "KeyPairVerified", "ok")},
+		},
+		{
+			name:    "issuer in another namespace is not this certificate's",
+			issuers: []cmapi.Issuer{issuer("elsewhere", ca, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+		},
+		{
+			name:    "issuer with another name is not this certificate's",
+			issuers: []cmapi.Issuer{issuer(testNamespace, other, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+		},
+		{
+			name:           "an Issuer of the same name is not the ClusterIssuer",
+			ref:            cmmeta.IssuerReference{Kind: "ClusterIssuer"},
+			issuers:        []cmapi.Issuer{issuer(testNamespace, ca, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+			clusterIssuers: nil,
+		},
+		{
+			name: "no Ready condition yet",
+			issuers: []cmapi.Issuer{{
+				ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: ca},
+			}},
+		},
+		{
+			name:    "external issuer group is not read",
+			ref:     cmmeta.IssuerReference{Group: "awspca.cert-manager.io", Kind: "AWSPCAIssuer"},
+			issuers: []cmapi.Issuer{issuer(testNamespace, ca, cmmeta.ConditionFalse, "ErrGetKeyPair", nope)},
+		},
+		{
+			name: "no issuers read at all",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cert := certificate()
+			cert.Spec.IssuerRef = tt.ref
+			if cert.Spec.IssuerRef.Name == "" {
+				cert.Spec.IssuerRef.Name = ca
+			}
+			if got := IssuerError(cert, tt.issuers, tt.clusterIssuers); got != tt.want {
+				t.Errorf("IssuerError() = %q, want %q", got, tt.want)
 			}
 		})
 	}

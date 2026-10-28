@@ -3,7 +3,9 @@
 ## Status
 Decided. The "missing namespaces are reported" part is superseded by
 [ADR 0011](0011-namespace-validation.md): namespaces are validated by the
-controller instead, and report mode no longer checks them.
+controller instead, and report mode no longer checks them. The report Pod's RBAC
+also gained read access to Issuers and ClusterIssuers in
+[ADR 0021](0021-issuer-diagnostics.md).
 
 ## Context
 ADR 0002 made `CertReport` cluster-scoped, with a spec field controlling

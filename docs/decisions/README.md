@@ -28,19 +28,9 @@ works is described in [`../internals/`](../README.md#internals).
 | 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
 | 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch) | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
 | 20 | Ingress annotation mode: opt-in per CR (`spec.ingressAnnotationMode`, exclusive with `namespaces`); Ingresses join a CR with one annotation and map to Certificates by `secretName`; no cross-tenant guard in v1 (revises 10's RBAC) | [0020-ingress-annotation-mode.md](0020-ingress-annotation-mode.md) |
+| 21 | Non-ACME failure diagnostics: the newest CertificateRequest's and the Issuer's/ClusterIssuer's `Ready` condition, verbatim; the report Pod reads Issuers and ClusterIssuers (revises 10's RBAC) | [0021-issuer-diagnostics.md](0021-issuer-diagnostics.md) |
 
 ## Open / not yet decided
-
-- Diagnostics for non-ACME failures: ADR 0004 takes `State`/`Reason` only
-  from ACME Orders/Challenges, so a certificate from a CA, Vault or
-  self-signed issuer that fails to issue is reported with no reason at all.
-  Found by the cluster tests. Checked on the cluster: the Certificate's own
-  `Ready` condition doesn't help (`DoesNotExist` refers to its TLS Secret,
-  normal before first issuance); the newest CertificateRequest's `Ready`
-  condition points at the issuer; the Issuer's `Ready` condition has the
-  root cause (e.g. `ErrGetKeyPair`: CA Secret not found). Options: relay the
-  request's condition, or the request's plus the Issuer's (needs read RBAC on
-  Issuers/ClusterIssuers, revising ADR 0010).
 
 - Packaging (ADR 0016): ship a Helm chart as the supported install path.
   ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
@@ -88,6 +78,53 @@ works is described in [`../internals/`](../README.md#internals).
   This also settles what `CertReport.status` holds beyond conditions (ADR 0018
   question 8), and whether `kubectl get` gets a health column.
 
+## Where we stopped (2026-10-28): `v0.1.0-beta.5` is published, nothing tested on a cluster yet
+
+Notes as written at the end of the day, not new decisions.
+
+**Published.** `v0.1.0-beta.5` (tag on `211fa43`): image `ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.5`,
+chart `oci://ghcr.io/sakshitposting-irl/charts/cyclops` version `0.1.0-beta.5`, and a GitHub
+pre-release with the chart attached. It is the first release with the welcome email.
+
+**Tag clean-up still to do.**
+- `v0.1.0-beta.3` and `v0.1.0-beta.4` point to the same commit (`8c3e46d`) as the code in `beta.5`.
+  Their release runs failed at "Create the GitHub release" because a release for the tag already
+  existed (made by hand), so neither release has the chart attached. Image and chart for both
+  are in GHCR. Delete the `beta.4` release and tag; keep `beta.3` only if you want its edited
+  title, otherwise delete it too. `beta.5` is the one to use.
+- The `beta.5` release page has GitHub's generated notes. The drafted notes (welcome email, the
+  logo, "every existing `CertReport` sends one welcome after upgrading", RBAC grew, the
+  `.dockerignore` fix) are not on it yet.
+- The fix for the failure is in `release.yml` (`211fa43`): an existing release gets the chart
+  attached with `--clobber` instead of failing. That branch has not run yet; `beta.5` took the
+  "create" path.
+
+**Next: test as an end user.**
+- Use a fresh kind cluster with cert-manager. The `kind-cyclops` cluster exists but was not
+  inspected; the kubectl context at the time was `kind-hfirst`, a different project, so pass
+  `--context` on every command.
+- Install the published chart (`--version 0.1.0-beta.5`, `email.smtp.host=...`).
+- First with MailHog (`hack/kind/mail.yaml`), then SMTP with real auth/STARTTLS (a throwaway
+  Gmail app password or Mailtrap), then SES if there is an AWS account.
+- Check: the welcome Job appears and completes, `WelcomeSent=True`, `cyclops-state-<name>` has
+  `welcomeSentAt`, the email looks right (subject, logo, schedule, namespaces). Then break it: a
+  bad host gives `WelcomeSent=False` and one Warning Event, with no retry; editing the
+  `CertReport` makes a new Job; restarting the controller sends nothing again.
+- Check the `cid:` logo in Gmail and Outlook.
+
+**After that.**
+- Update the install version strings (README, chart README) from `beta.2` to `beta.5`, and the
+  "on `main`, not in the published beta" wording about the welcome.
+- Fill in the two skipped stubs in `internal/certmanager/list_test.go`
+  (`TestAnnotatedIngresses`, `TestListForIngresses`); the README calls annotation mode
+  "unit-tested".
+- Turn on `test.yml` and `lint.yml` (both are manual-only; lint is clean locally).
+- Fix the `.git/hooks/pre-commit` empty-diff bug: it rejects a commit with nothing staged
+  (a "staged content matches" error from its blocked-word check). `8c3e46d` also has seven bullets against the
+  three-bullet rule; it is pushed, so leave it.
+- Open: release scope and ADR 0016, the webhook (ADR 0017), non-ACME diagnostics, dedup,
+  HA, `IngressAnnotationMode` on `TemplateData`.
+
 ## Where we stopped (2026-10-27): welcome email and webhook
 
 Notes as written at the end of the day, not new decisions.
@@ -109,8 +146,7 @@ Notes as written at the end of the day, not new decisions.
   `ttlSecondsAfterFinished`. Deleting the state ConfigMap by hand sends the welcome again.
 - Built: `Owns(&batchv1.Job{})`, RBAC for `jobs` and `configmaps`, the welcome template and
   subject, and the `Welcome`, `Schedule` and `Namespaces` template fields (ADR 0013, additive).
-- Still to do: run it on kind with a real mail server; test the welcome with real SMTP and SES.
-  `.Namespaces` is empty both for "every namespace" and for Ingress annotation mode, so the
+- Still to do: see the 2026-10-28 notes above. `.Namespaces` is empty both for "every namespace" and for Ingress annotation mode, so the
   welcome text hedges; an additive `IngressAnnotationMode` field would fix that.
 
 **Webhook** ([ADR 0017](0017-webhook-notifier.md): open)

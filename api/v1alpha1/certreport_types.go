@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// certreport_types.go defines the CertReport API: its spec (schedule, scope, notifiers, template,
+// CronJob settings), its status conditions, and the +kubebuilder markers controller-gen turns into
+// the CRD (ADR 0018).
+
 package v1alpha1
 
 import (

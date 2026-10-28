@@ -46,13 +46,19 @@ type CertStatus struct {
 	// failed. Zero means none have failed since the last success.
 	FailedIssuanceAttempts int
 	// State is the ACME state of the most specific failing Order or
-	// Challenge (e.g. "pending", "invalid", "errored"). Empty if there is
-	// none.
+	// Challenge (e.g. "pending", "invalid", "errored"). Without an Order
+	// (CA, Vault, self-signed...) it is the newest CertificateRequest's
+	// Ready reason (e.g. "Pending", "Failed"). Empty if there is none.
 	State string
 	// Reason is cert-manager's free-text reason for State, copied
 	// verbatim. Its wording is not stable across cert-manager versions, so
 	// it is for humans to read, not for code to match on.
 	Reason string
+	// IssuerError is the Ready condition of the certificate's Issuer or
+	// ClusterIssuer when it is not True, as "<kind> <name>: <reason>:
+	// <message>", copied verbatim. Empty if the issuer is ready, is not a
+	// cert-manager.io issuer, or was not found.
+	IssuerError string
 
 	// Ingresses are the names of the annotated Ingresses that put this
 	// certificate in scope (ADR 0020). Empty outside annotation mode.

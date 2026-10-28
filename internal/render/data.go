@@ -68,6 +68,10 @@ type Row struct {
 	// (ADR 0004). Either may be empty.
 	State  string
 	Reason string
+	// IssuerError is why the certificate's Issuer or ClusterIssuer is not
+	// ready, e.g. "Issuer broken-ca: ErrGetKeyPair: ...", verbatim. Empty
+	// when the issuer is ready or unknown. Additive change under ADR 0013.
+	IssuerError string
 	// Ingresses are the Ingresses that put the certificate in scope in
 	// annotation mode (ADR 0020). Empty in namespace mode. Additive change
 	// under ADR 0013.
@@ -92,6 +96,7 @@ func NewTemplateData(reportName string, now time.Time, findings []report.Finding
 			FailedIssuanceAttempts: f.Cert.FailedIssuanceAttempts,
 			State:                  f.Cert.State,
 			Reason:                 f.Cert.Reason,
+			IssuerError:            f.Cert.IssuerError,
 			Ingresses:              f.Cert.Ingresses,
 		}
 		templateData.Findings = append(templateData.Findings, row)

@@ -10,7 +10,7 @@
   Available data (see the chart README for types and details):
     .ReportName   .GeneratedAt   .Findings (may be empty; most urgent first)
     each finding: .Kind .Namespace .Name .NotAfter .DaysLeft .RenewalTime
-                  .FailedIssuanceAttempts .State .Reason .Ingresses
+                  .FailedIssuanceAttempts .State .Reason .IssuerError .Ingresses
   .Ingresses lists the Ingresses that put the certificate in scope (annotation mode, ADR 0020);
   it is empty otherwise. .Kind is NeverIssued, Expired or RenewalOverdue. .NotAfter and .RenewalTime are zero when
   unset: test with .IsZero. Referencing any other field fails the run and sends no email.
@@ -71,7 +71,9 @@
       </td>
       <td style="padding: 6px 12px 6px 0;">{{ .FailedIssuanceAttempts }}</td>
       <td style="padding: 6px 0;">
-        {{- if or .State .Reason }}{{ with .State }}<strong>{{ . }}</strong>{{ end }}{{ if and .State .Reason }}: {{ end }}{{ .Reason }}
+        {{- if or .State .Reason .IssuerError }}
+          {{- if or .State .Reason }}{{ with .State }}<strong>{{ . }}</strong>{{ end }}{{ if and .State .Reason }}: {{ end }}{{ .Reason }}{{ end }}
+          {{- if .IssuerError }}{{ if or .State .Reason }}<br>{{ end }}{{ .IssuerError }}{{ end }}
         {{- else }}—{{ end -}}
       </td>
     </tr>

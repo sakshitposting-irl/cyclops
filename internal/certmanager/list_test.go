@@ -24,6 +24,7 @@ import (
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -147,6 +148,54 @@ func TestSnapshot_CertStatuses(t *testing.T) {
 	slices.Sort(names)
 	if want := []string{"a/cert", "b/cert"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("CertStatuses() = %v, want %v", names, want)
+	}
+}
+
+// TestList_IssuerError checks the whole path for ADR 0021: List reads the
+// namespace's Issuers and every ClusterIssuer, and CertStatuses turns a
+// not-ready one into the certificate's IssuerError.
+func TestList_IssuerError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{cmapi.AddToScheme, acmev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notReady := cmapi.IssuerStatus{Conditions: []cmapi.IssuerCondition{{
+		Type: cmapi.IssuerConditionReady, Status: cmmeta.ConditionFalse,
+		Reason: "ErrGetKeyPair", Message: "no CA",
+	}}}
+	cert := func(ns, issuerKind, issuerName string) *cmapi.Certificate {
+		return &cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cert"},
+			Spec:       cmapi.CertificateSpec{IssuerRef: cmmeta.IssuerReference{Kind: issuerKind, Name: issuerName}},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		cert("a", "Issuer", "ca"),
+		cert("b", "ClusterIssuer", "shared"),
+		&cmapi.Issuer{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "ca"}, Status: notReady},
+		&cmapi.ClusterIssuer{ObjectMeta: metav1.ObjectMeta{Name: "shared"}, Status: notReady},
+	).Build()
+
+	snap, err := List(context.Background(), c, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(snap.Issuers) != 1 || len(snap.ClusterIssuers) != 1 {
+		t.Fatalf("List() read %d Issuers and %d ClusterIssuers, want 1 and 1", len(snap.Issuers), len(snap.ClusterIssuers))
+	}
+
+	got := map[string]string{}
+	for _, s := range snap.CertStatuses() {
+		got[s.Namespace] = s.IssuerError
+	}
+	want := map[string]string{
+		"a": "Issuer ca: ErrGetKeyPair: no CA",
+		"b": "ClusterIssuer shared: ErrGetKeyPair: no CA",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("IssuerError by namespace = %v, want %v", got, want)
 	}
 }
 

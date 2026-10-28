@@ -165,6 +165,36 @@ func TestRender_DefaultIngresses(t *testing.T) {
 	}
 }
 
+func TestRender_DefaultIssuerError(t *testing.T) {
+	const issuerErr = `Issuer broken-ca: ErrGetKeyPair: Error getting keypair for CA issuer: secrets "does-not-exist" not found`
+	data := TemplateData{
+		ReportName:  testReport,
+		GeneratedAt: now.UTC(),
+		Findings: []Row{
+			{Kind: testNever, Namespace: testDev, Name: testBroken, State: "Pending", Reason: "issuer not ready", IssuerError: issuerErr},
+			// The issuer error is shown on its own when there is no State or Reason.
+			{Kind: testNever, Namespace: testProd, Name: testWeb, IssuerError: "ClusterIssuer <b>x</b>: Bad"},
+		},
+	}
+	body, err := Render(Default, data)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	for _, want := range []string{
+		"<strong>Pending</strong>: issuer not ready",
+		// Untrusted text is escaped, quotes included.
+		"Issuer broken-ca: ErrGetKeyPair: Error getting keypair for CA issuer: secrets &#34;does-not-exist&#34; not found",
+		"ClusterIssuer &lt;b&gt;x&lt;/b&gt;: Bad",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<b>x</b>") {
+		t.Errorf("issuer error was rendered as markup")
+	}
+}
+
 func TestRender_DefaultEmpty(t *testing.T) {
 	body, err := Render(Default, TemplateData{ReportName: testReport, GeneratedAt: now.UTC()})
 	if err != nil {

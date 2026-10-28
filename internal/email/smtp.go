@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// smtp.go sends mail over SMTP (plain, StartTLS or implicit TLS, with optional AUTH) and builds
+// the MIME message, including inline images (ADR 0008).
+
 package email
 
 import (

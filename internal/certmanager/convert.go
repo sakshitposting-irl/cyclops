@@ -20,11 +20,13 @@ limitations under the License.
 package certmanager
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/sakshitposting-irl/cyclops/internal/report"
@@ -70,8 +72,8 @@ func ToCertStatus(
 		return s
 	}
 
-	// Find the Order owned by newestReq. Non-ACME issuers have none, which
-	// leaves State and Reason empty.
+	// Find the Order owned by newestReq. Non-ACME issuers have none; for
+	// them the request's own Ready condition is the diagnostic (below).
 	var newestOrder *acmev1.Order
 	for i := range orders {
 		order := &orders[i]
@@ -83,6 +85,7 @@ func ToCertStatus(
 	}
 
 	if newestOrder == nil {
+		s.State, s.Reason = requestNotReady(newestReq)
 		return s
 	}
 
@@ -111,6 +114,59 @@ func ToCertStatus(
 	}
 
 	return s
+}
+
+// requestNotReady returns the Reason and Message of req's Ready condition
+// when it is not True, verbatim (ADR 0004, ADR 0021). Empty when the request
+// is ready or cert-manager hasn't set the condition yet.
+func requestNotReady(req *cmapi.CertificateRequest) (state, reason string) {
+	for _, c := range req.Status.Conditions {
+		if c.Type == cmapi.CertificateRequestConditionReady && c.Status != cmmeta.ConditionTrue {
+			return c.Reason, c.Message
+		}
+	}
+	return "", ""
+}
+
+// IssuerError describes why cert's issuer is not ready, or returns "" when it
+// is ready, was not found, or is an external issuer (a group other than
+// cert-manager.io, whose type this package doesn't read). issuers and
+// clusterIssuers may hold objects for other namespaces and names (ADR 0021).
+func IssuerError(cert *cmapi.Certificate, issuers []cmapi.Issuer, clusterIssuers []cmapi.ClusterIssuer) string {
+	ref := cert.Spec.IssuerRef
+	if ref.Group != "" && ref.Group != cmapi.SchemeGroupVersion.Group {
+		return ""
+	}
+
+	var kind string
+	var conditions []cmapi.IssuerCondition
+	switch ref.Kind {
+	case "", cmapi.IssuerKind:
+		kind = cmapi.IssuerKind
+		i := slices.IndexFunc(issuers, func(i cmapi.Issuer) bool {
+			return i.Namespace == cert.Namespace && i.Name == ref.Name
+		})
+		if i < 0 {
+			return ""
+		}
+		conditions = issuers[i].Status.Conditions
+	case cmapi.ClusterIssuerKind:
+		kind = cmapi.ClusterIssuerKind
+		i := slices.IndexFunc(clusterIssuers, func(i cmapi.ClusterIssuer) bool { return i.Name == ref.Name })
+		if i < 0 {
+			return ""
+		}
+		conditions = clusterIssuers[i].Status.Conditions
+	default:
+		return ""
+	}
+
+	for _, c := range conditions {
+		if c.Type == cmapi.IssuerConditionReady && c.Status != cmmeta.ConditionTrue {
+			return fmt.Sprintf("%s %s: %s: %s", kind, ref.Name, c.Reason, c.Message)
+		}
+	}
+	return ""
 }
 
 // timeOrZero unwraps an optional API timestamp. cert-manager leaves these

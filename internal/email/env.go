@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// env.go builds the Sender for the configured provider from the report Pod's environment
+// (ADR 0014).
+
 package email
 
 import (

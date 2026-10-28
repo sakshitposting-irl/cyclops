@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// ses.go sends mail through Amazon SES v2, using the AWS SDK's default credential chain
+// (static keys, IRSA or Pod Identity; ADR 0008).
+
 package email
 
 import (
