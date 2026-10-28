@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// evaluate.go decides which certificates need attention: never issued, expired, or overdue for
+// renewal (ADR 0009, ADR 0012).
+
 package report
 
 import (

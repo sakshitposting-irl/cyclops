@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command cyclops is the controller and the report job in one binary (ADR 0006). By default it
+// runs the controller manager; given the `report` argument it runs once, as the CronJob's Pod:
+// list the certificates, evaluate them, and send the report (see report.go).
 package main
 
 import (

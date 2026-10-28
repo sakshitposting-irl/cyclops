@@ -45,6 +45,7 @@ type Row struct {
 	FailedIssuanceAttempts int
 	State                  string    // verbatim from cert-manager (ADR 0004); may be empty
 	Reason                 string    // verbatim from cert-manager (ADR 0004); may be empty
+	IssuerError            string    // the Issuer's Ready condition when not ready (ADR 0021); may be empty
 }
 ```
 

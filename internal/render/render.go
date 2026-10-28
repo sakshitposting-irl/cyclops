@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// render.go parses and executes the email templates (the built-in report and welcome templates,
+// or a user's), builds the subject line, and lists the inline images the body needs (ADR 0005).
+
 package render
 
 import (

@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package utils holds helpers for the e2e tests: running commands, installing cert-manager, and
+// loading the image into a kind cluster.
 package utils
 
 import (

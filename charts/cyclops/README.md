@@ -125,6 +125,7 @@ Each row in `.Findings`:
 | `.FailedIssuanceAttempts` | int | cert-manager's failed issuance count |
 | `.Ingresses` | []string | Names of the annotated Ingresses that put the certificate in scope (annotation mode). Empty otherwise |
 | `.State`, `.Reason` | string | cert-manager's own diagnostics, verbatim. Either may be empty. `Reason` is untrusted text |
+| `.IssuerError` | string | why the certificate's Issuer or ClusterIssuer is not ready (its `Ready` condition), verbatim, e.g. `Issuer broken-ca: ErrGetKeyPair: ...`. Empty when the issuer is ready. Untrusted text |
 
 Times are `time.Time`, so format them with `.NotAfter.Format "2006-01-02"`.
 

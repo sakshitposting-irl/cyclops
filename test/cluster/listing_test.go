@@ -153,6 +153,33 @@ func TestListing(t *testing.T) {
 		}
 	})
 
+	// The broken cert's Issuer points at a CA Secret that doesn't exist. cert-manager
+	// never fails the request, so FailedIssuanceAttempts stays 0; the reason is on
+	// the request ("Pending") and the Issuer (ErrGetKeyPair), ADR 0021.
+	t.Run("non-ACME failure carries the issuer error", func(t *testing.T) {
+		snap, err := certmanager.List(context.Background(), c, []string{nsA, nsB})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got := map[string]report.CertStatus{}
+		for _, s := range snap.CertStatuses() {
+			got[s.Namespace+"/"+s.Name] = s
+		}
+		broken := got[nsB+"/broken"]
+		if want := "Issuer broken-ca: ErrGetKeyPair: "; !strings.HasPrefix(broken.IssuerError, want) {
+			t.Errorf("broken IssuerError = %q, want prefix %q", broken.IssuerError, want)
+		}
+		if broken.State != "Pending" {
+			t.Errorf("broken State = %q, want the request's Ready reason %q", broken.State, "Pending")
+		}
+		for _, name := range []string{nsA + "/healthy", nsA + "/expiring"} {
+			if got[name].IssuerError != "" || got[name].State != "" {
+				t.Errorf("%s has diagnostics %q / %q, want none", name, got[name].State, got[name].IssuerError)
+			}
+		}
+	})
+
 	// A real overdue renewal would take hours to produce, so evaluate the
 	// same snapshot as of a later date instead. cert-manager renews at 2/3
 	// of a certificate's lifetime by default, so 15 days from now is past

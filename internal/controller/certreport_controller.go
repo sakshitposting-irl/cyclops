@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package controller reconciles CertReport resources. It does not build reports itself: it keeps
+// the owned CronJob in step with spec.schedule, runs the one-time welcome email Job, and records
+// what it finds as status conditions (ADR 0006, ADR 0015, ADR 0018).
 package controller
 
 import (

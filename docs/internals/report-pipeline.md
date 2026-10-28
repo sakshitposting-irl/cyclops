@@ -62,8 +62,9 @@ thousands of certificates). At very large scale, listing is the expensive step, 
 | `NotAfter` | `time.Time` | **never issued** | `Certificate.status.notAfter` |
 | `RenewalTime` | `time.Time` | no renewal scheduled | `Certificate.status.renewalTime` |
 | `FailedIssuanceAttempts` | `int` | no failures since last success | `Certificate.status.failedIssuanceAttempts` |
-| `State` | `string` | nothing to report | failing Challenge or Order (below) |
+| `State` | `string` | nothing to report | failing Challenge or Order (below); with no Order, the newest CertificateRequest's `Ready` reason (ADR 0021) |
 | `Reason` | `string` | nothing to report | same object as `State`, copied verbatim |
+| `IssuerError` | `string` | issuer is ready, unknown or external | the Issuer's or ClusterIssuer's `Ready` condition when not `True`, as `<Kind> <name>: <Reason>: <Message>` (ADR 0021) |
 
 `NotAfter` keeps the X.509 name for "expiry date". Read it as *ExpiresAt*: the "Not" is not a
 negation.
@@ -299,7 +300,7 @@ subject := render.Subject(data)                           // "[cyclops] 2 certif
 
 Every template, the built-in one and custom ones, receives a `TemplateData`: `ReportName`,
 `GeneratedAt`, and `Findings` as a flat list of `Row`s (`Kind`, `Namespace`, `Name`, `NotAfter`,
-`DaysLeft`, `RenewalTime`, `FailedIssuanceAttempts`, `State`, `Reason`). It is a separate type
+`DaysLeft`, `RenewalTime`, `FailedIssuanceAttempts`, `State`, `Reason`, `IssuerError`). It is a separate type
 from `report.Finding` on purpose: users' templates depend on these field names, so internal types
 can change behind it without breaking anyone. Fields may be added; renaming or removing one needs
 a new ADR.

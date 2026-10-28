@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// list.go reads cert-manager objects from the cluster into a Snapshot, either from a list of
+// namespaces or, in annotation mode, from the Certificates behind annotated Ingresses (ADR 0010,
+// ADR 0020), and converts them to report.CertStatus with convert.go.
+
 package certmanager
 
 import (
@@ -35,14 +39,17 @@ type Snapshot struct {
 	Requests     []cmapi.CertificateRequest
 	Orders       []acmev1.Order
 	Challenges   []acmev1.Challenge
+	// Issuers and ClusterIssuers are read for their Ready condition (ADR 0021).
+	Issuers        []cmapi.Issuer
+	ClusterIssuers []cmapi.ClusterIssuer
 
 	// Ingresses maps each kept Certificate's secret to the Ingresses that use
 	// it. Only set in annotation mode (ADR 0020).
 	Ingresses map[SecretKey][]string
 }
 
-// List reads Certificates, CertificateRequests, Orders and Challenges from
-// the given namespaces. Empty namespaces means all namespaces, read with one
+// List reads Certificates, CertificateRequests, Orders, Challenges and
+// Issuers from the given namespaces, plus all ClusterIssuers. Empty namespaces means all namespaces, read with one
 // cluster-wide List per kind (ADR 0010). A namespace that doesn't exist
 // contributes nothing; the controller reports it (ADR 0011).
 func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, error) {
@@ -90,7 +97,20 @@ func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, 
 			return snap, err
 		}
 		snap.Challenges = append(snap.Challenges, challengeList.Items...)
+
+		var issuerList cmapi.IssuerList
+		if err := c.List(ctx, &issuerList, client.InNamespace(ns)); err != nil {
+			return snap, err
+		}
+		snap.Issuers = append(snap.Issuers, issuerList.Items...)
 	}
+
+	// ClusterIssuers are cluster-scoped, so one List however many namespaces.
+	var clusterIssuerList cmapi.ClusterIssuerList
+	if err := c.List(ctx, &clusterIssuerList); err != nil {
+		return snap, err
+	}
+	snap.ClusterIssuers = clusterIssuerList.Items
 
 	return snap, nil
 }
@@ -100,8 +120,9 @@ func List(ctx context.Context, c client.Reader, namespaces []string) (Snapshot, 
 func (s Snapshot) CertStatuses() []report.CertStatus {
 	statuses := make([]report.CertStatus, 0, len(s.Certificates))
 	for i := range s.Certificates {
-		status := ToCertStatus(&s.Certificates[i], s.Requests, s.Orders, s.Challenges)
 		cert := &s.Certificates[i]
+		status := ToCertStatus(cert, s.Requests, s.Orders, s.Challenges)
+		status.IssuerError = IssuerError(cert, s.Issuers, s.ClusterIssuers)
 		if names := s.Ingresses[SecretKey{cert.Namespace, cert.Spec.SecretName}]; len(names) > 0 {
 			status.Ingresses = slices.Sorted(slices.Values(names))
 		}

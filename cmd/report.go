@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// report.go is report mode, run as `cyclops report` by the CronJob's Pod: it loads the CertReport,
+// lists and evaluates the certificates in scope, renders the email, and sends it to the notifiers.
+// It sends nothing when there are no findings, except for the welcome email (ADR 0015).
+
 package main
 
 import (
