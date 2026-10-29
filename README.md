@@ -19,7 +19,7 @@ in the published beta (use `v0.1.0-beta.6` or newer).
 > a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
 > up on the `CertReport`. Not built yet: the webhook notifier. Real SMTP
-> authentication and STARTTLS have run against Gmail; SES has only been tested with a fake. See [Status](#status),
+> authentication and STARTTLS have run against Gmail; SES has not been run against real AWS (only against a fake client). See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
@@ -127,8 +127,8 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. `--welcome` sends the welcome message (see below) |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
 | Email rendering (`internal/render`) | Done, tested |
-| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server |
-| Email sending: SES (`internal/email`) | Done, tested against a fake client |
+| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 with a login) |
+| Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
 | Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
@@ -189,7 +189,7 @@ make manifests generate
 > [!WARNING]
 > `v0.1.0-beta.7` is a beta. It has no webhook (see [Status](#status)). Use `beta.6` or newer: `beta.5`
 > crash-loops on startup.
-> Real SMTP authentication and STARTTLS have run against Gmail; SES has only been tested with a fake. Try it on a non-production cluster first,
+> Real SMTP authentication and STARTTLS have run against Gmail; SES has not been run against real AWS (only against a fake client). Try it on a non-production cluster first,
 > or on kind with [the section below](#try-it-on-kind).
 
 **Prerequisites:** a cluster with [cert-manager](https://cert-manager.io) installed, `kubectl`, and
@@ -433,7 +433,7 @@ kubectl get certreport <name> -o jsonpath='{.status.conditions}'
 
 > [!NOTE]
 > The path has been run end to end only on kind with an unauthenticated fake SMTP server. Real
-> SMTP authentication and STARTTLS have run against Gmail, and SES has only been tested with a fake, so expect rough edges.
+> SMTP authentication and STARTTLS have run against Gmail, and SES has not been run against real AWS, so expect rough edges.
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 
