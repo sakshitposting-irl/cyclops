@@ -60,7 +60,7 @@ func TestRun_NamespaceDefaultsToPodNamespace(t *testing.T) {
 
 	// With the namespace coming from the environment, run gets past flag validation
 	// and fails later, on the missing kubeconfig.
-	err := run(context.Background(), []string{reportImageFlag, "--webhook-port=-1", "--metrics-bind-address=0"})
+	err := run(context.Background(), []string{reportImageFlag, "--metrics-bind-address=0"})
 	if err == nil || !strings.Contains(err.Error(), "loading kubeconfig") {
 		t.Fatalf("run() error = %v, want it to get as far as loading kubeconfig", err)
 	}
@@ -83,7 +83,7 @@ func TestRun_FailsWithoutKubeconfig(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 
-	err := run(context.Background(), append([]string{"--webhook-port=-1", "--metrics-bind-address=0"}, requiredFlags...))
+	err := run(context.Background(), append([]string{"--metrics-bind-address=0"}, requiredFlags...))
 	if err == nil {
 		t.Fatal("expected error when no kubeconfig is available, got nil")
 	}
