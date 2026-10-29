@@ -20,7 +20,7 @@ Framework reference: the kubebuilder book (https://book.kubebuilder.io).
 │  ① init():  build the Scheme                                 │
 │  ② main():  call run(), map its error to an exit code        │
 │  ③ run():   parse flags + logger                             │
-│             configure HTTP servers (metrics, webhook, probes)│
+│             configure HTTP servers (metrics, probes)         │
 │  ④          ctrl.NewManager(...)                             │
 │  ⑤          register reconciler, health checks, mgr.Start()  │
 └──────────────────────────────────────────────────────────────┘
@@ -31,7 +31,7 @@ are the whole point.
 
 ```
 declare knobs → bind flags → parse → logger
-→ build tls tweaks → build webhook opts → build metrics opts
+→ build tls tweaks → build metrics opts
 → GetConfig → NewManager(cfg, opts)   # assemble, powered off
 → reconciler.SetupWithManager         # plug in our controller
 → health checks                       # plug in probes
@@ -210,9 +210,8 @@ twice. `ContinueOnError` makes a bad flag return an error from `fs.Parse` instea
 | `--health-probe-bind-address` | `:8081` | `/healthz`, `/readyz` for kubelet | yes |
 | `--leader-elect` | `false` | Lease-based single-active-replica | yes (open ADR item) |
 | `--metrics-secure` | `true` | require SA token to scrape | somewhat |
-| `--webhook-port` | `9443` | admission webhook listener | **no**, we have no webhooks |
-| `--webhook-cert-*`, `--metrics-cert-*` | `""`, `tls.crt`, `tls.key` | on-disk TLS certs for those servers | no / somewhat |
-| `--enable-http2` | `false` | keep HTTP/2 off (Rapid Reset CVE) | only affects the two servers |
+| `--metrics-cert-*` | `""`, `tls.crt`, `tls.key` | on-disk TLS cert for the metrics server | somewhat |
+| `--enable-http2` | `false` | keep HTTP/2 off (Rapid Reset CVE) | only affects the metrics server |
 
 What the pod actually gets (`config/manager/manager.yaml`):
 
@@ -258,16 +257,8 @@ if !enableHTTP2 {
 ```
 
 A closure that restricts ALPN to HTTP/1.1. Not called here, only appended to `tlsOpts`. The metrics
-and webhook servers each build their own `tls.Config` later and run every function in `tlsOpts`
-over it. This is the **functional options** idiom: pass mutators, not finished configs. It appears
+server builds its own `tls.Config` later and runs every function in `tlsOpts` over it. This is the **functional options** idiom: pass mutators, not finished configs. It appears
 again in `client.Options`, `zap.Opts`, etc.
-
-### Webhook server
-
-Builds (doesn't start) an HTTPS server for admission webhooks. If `--webhook-cert-path` is given,
-it points at those files; otherwise controller-runtime self-signs at startup. **We register zero
-webhooks**, so this listens on 9443 and answers nothing. Scaffold weight; candidate for
-`--webhook-port=-1` or removal.
 
 ### Metrics server
 
@@ -282,8 +273,7 @@ if secureMetrics {
 }
 ```
 
-Same shape as the webhook block, but an *options struct*, not a built server: the manager builds
-the metrics server itself. `FilterProvider` is middleware that, per `/metrics` request, calls the
+An *options struct*, not a built server: the manager builds the metrics server itself. `FilterProvider` is middleware that, per `/metrics` request, calls the
 API server twice: **TokenReview** (is this bearer token a real ServiceAccount?) and
 **SubjectAccessReview** (may that SA `get` the non-resource URL `/metrics`?). That's why
 `test/e2e` creates a ClusterRoleBinding, mints a token via TokenRequest, and curls with
@@ -303,7 +293,6 @@ if err != nil {
 mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
     Scheme:                 scheme,
     Metrics:                metricsServerOptions,
-    WebhookServer:          webhookServer,
     HealthProbeBindAddress: probeAddr,
     LeaderElection:         enableLeaderElection,
     LeaderElectionID:       "d7c22753.sakshitposting-irl.github.io",
@@ -331,8 +320,7 @@ The scaffold used `GetConfigOrDie()`, which calls `os.Exit(1)` itself on failure
                     │  Client      (reads → cache, writes →    │
                     │               API server)                │
                     │  Controllers [certreport, ...]           │
-                    │  Runnables   [metrics srv, probe srv,    │
-                    │               webhook srv]               │
+                    │  Runnables   [metrics srv, probe srv]    │
                     │  Leader election (Lease)                 │
                     │  Signal/lifecycle                        │
                     └──────────────────────────────────────────┘
@@ -401,8 +389,7 @@ mgr.AddReadyzCheck("readyz", healthz.Ping)
 
 `healthz.Checker` is `func(*http.Request) error`; `Ping` always returns nil. Both endpoints on
 `:8081` mean "process up and serving HTTP", nothing smarter. The manifest's liveness/readiness
-probes hit these. Webhook-serving controllers use `mgr.GetWebhookServer().StartedChecker()`; we
-don't need it.
+probes hit these.
 
 ---
 
@@ -426,7 +413,7 @@ pass their own.
 `mgr.Start(ctx)` **blocks for the life of the process.** Inside, in order:
 
 ```
-1. start non-leader-election runnables   (probes → /readyz green; metrics; webhook)
+1. start non-leader-election runnables   (probes → /readyz green; metrics)
 2. if leader election: block until we hold the Lease   (followers stop here)
 3. start the cache → LIST every watched GVR → open WATCH → wait for sync
 4. start controllers → workers pull from queues, call Reconcile
@@ -476,7 +463,6 @@ ADR 0006: one binary, two modes. `main.go` has one so far.
   exit 0/1. See [report-pipeline.md](report-pipeline.md).
 - Register cert-manager's `certmanager/v1` and `acme/v1` types in `init()`.
 - `Owns(&batchv1.CronJob{})` in `SetupWithManager`.
-- Drop or disable the webhook server block.
 - Probably `Development: false` on the zap options; `LeaderElectionReleaseOnCancel: true`.
 
 ---
