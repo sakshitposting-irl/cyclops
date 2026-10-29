@@ -127,7 +127,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. `--welcome` sends the welcome message (see below) |
 | Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
 | Email rendering (`internal/render`) | Done, tested |
-| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 with a login) |
+| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
