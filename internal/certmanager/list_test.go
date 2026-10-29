@@ -26,6 +26,7 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -199,31 +200,145 @@ func TestList_IssuerError(t *testing.T) {
 	}
 }
 
+const (
+	testAnnotation = "example.com/cr-name" // the key is a parameter, so any key will do
+	testCR         = "prod-certs"
+)
+
+// ingressCluster returns a fake client holding objs, with Ingresses in the scheme.
+func ingressCluster(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		corev1.AddToScheme, cmapi.AddToScheme, acmev1.AddToScheme, networkingv1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+// ingress builds an Ingress with the given tls secret names. An empty cr leaves it unannotated.
+func ingress(ns, name, cr string, secrets ...string) *networkingv1.Ingress {
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+	if cr != "" {
+		ing.Annotations = map[string]string{testAnnotation: cr}
+	}
+	for _, sec := range secrets {
+		ing.Spec.TLS = append(ing.Spec.TLS, networkingv1.IngressTLS{SecretName: sec})
+	}
+	return ing
+}
+
+// certWithSecret builds a Certificate that writes its certificate to the given Secret.
+func certWithSecret(ns, name, secret string) *cmapi.Certificate {
+	return &cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec:       cmapi.CertificateSpec{SecretName: secret},
+	}
+}
+
 // TestAnnotatedIngresses covers the Ingress lookup (ADR 0020).
-// TODO: build a fake client with networkingv1 added to the scheme and these
-// Ingresses, then assert the returned map (sort each slice before comparing):
-//   - two annotated Ingresses sharing one secretName -> one key, two names
-//   - an Ingress with two tls entries -> two keys
-//   - an Ingress with a different cr-name -> skipped
-//   - an Ingress with no annotation -> skipped
-//   - a tls entry with an empty secretName -> skipped
-//   - no Ingresses at all -> empty map, nil error
 func TestAnnotatedIngresses(t *testing.T) {
-	t.Skip("TODO: scaffold")
+	t.Run("only Ingresses annotated for this CertReport count", func(t *testing.T) {
+		c := ingressCluster(t,
+			// Two Ingresses share a secret, and one has two tls entries.
+			ingress("a", "prod", testCR, "shared-tls", "second-tls"),
+			ingress("a", "qa", testCR, "shared-tls"),
+			ingress("a", "other-report", "other-certs", "other-tls"), // another CertReport's
+			ingress("a", "plain", "", "plain-tls"),                   // not annotated
+			ingress("b", "no-secret", testCR, ""),                    // tls entry without a secretName
+		)
+
+		got, err := AnnotatedIngresses(context.Background(), c, testCR, testAnnotation)
+		if err != nil {
+			t.Fatalf("AnnotatedIngresses() error = %v", err)
+		}
+		for _, names := range got {
+			slices.Sort(names)
+		}
+		want := map[SecretKey][]string{
+			{"a", "shared-tls"}: {"prod", "qa"},
+			{"a", "second-tls"}: {"prod"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("AnnotatedIngresses() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("no Ingresses: empty map", func(t *testing.T) {
+		got, err := AnnotatedIngresses(context.Background(), ingressCluster(t), testCR, testAnnotation)
+		if err != nil {
+			t.Fatalf("AnnotatedIngresses() error = %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("AnnotatedIngresses() = %v, want empty", got)
+		}
+	})
 }
 
 // TestListForIngresses covers the annotation-mode listing (ADR 0020).
-// TODO: fake client with Ingresses and Certificates, then assert which
-// Certificates come back and that Snapshot.Ingresses is set:
-//   - Certificate whose (namespace, spec.secretName) matches an annotated
-//     Ingress -> kept
-//   - Certificate in the same namespace that no annotated Ingress references
-//     -> dropped
-//   - annotated Ingress whose secret has no Certificate -> nothing returned
-//   - no annotated Ingresses -> empty Snapshot (must NOT list every namespace)
-//   - Certificates in an unrelated namespace are never read
 func TestListForIngresses(t *testing.T) {
-	t.Skip("TODO: scaffold")
+	ctx := context.Background()
+
+	t.Run("keeps the Certificate behind an annotated Ingress and nothing else", func(t *testing.T) {
+		c := ingressCluster(t,
+			ingress("a", "shop", testCR, "shop-tls"),
+			certWithSecret("a", "kept", "shop-tls"),
+			certWithSecret("a", "dropped", "internal-tls"), // same namespace, no annotated Ingress
+			// Same secret name, but no annotated Ingress in this namespace: never read.
+			certWithSecret("z", "unrelated", "shop-tls"),
+			&cmapi.CertificateRequest{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "kept-1"}},
+			&cmapi.CertificateRequest{ObjectMeta: metav1.ObjectMeta{Namespace: "z", Name: "unrelated-1"}},
+		)
+
+		snap, err := ListForIngresses(ctx, c, testCR, testAnnotation)
+		if err != nil {
+			t.Fatalf("ListForIngresses() error = %v", err)
+		}
+
+		if got := namespacesOf(snap.Certificates); !reflect.DeepEqual(got, []string{"a"}) || snap.Certificates[0].Name != "kept" {
+			t.Errorf("Certificates = %v, want only a/kept", snap.Certificates)
+		}
+		if got := namespacesOf(snap.Requests); !reflect.DeepEqual(got, []string{"a"}) {
+			t.Errorf("Requests read from %v, want only namespace a", got)
+		}
+		if want := map[SecretKey][]string{{"a", "shop-tls"}: {"shop"}}; !reflect.DeepEqual(snap.Ingresses, want) {
+			t.Errorf("Ingresses = %v, want %v", snap.Ingresses, want)
+		}
+	})
+
+	t.Run("annotated Ingress whose secret has no Certificate: nothing returned", func(t *testing.T) {
+		c := ingressCluster(t,
+			ingress("a", "shop", testCR, "shop-tls"),
+			certWithSecret("a", "other", "other-tls"),
+		)
+
+		snap, err := ListForIngresses(ctx, c, testCR, testAnnotation)
+		if err != nil {
+			t.Fatalf("ListForIngresses() error = %v", err)
+		}
+		if len(snap.Certificates) != 0 {
+			t.Errorf("Certificates = %v, want none", snap.Certificates)
+		}
+	})
+
+	t.Run("no annotated Ingresses: empty Snapshot, not every namespace", func(t *testing.T) {
+		c := ingressCluster(t,
+			ingress("a", "shop", "other-certs", "shop-tls"), // annotated for another CertReport
+			certWithSecret("a", "kept-by-nobody", "shop-tls"),
+			&cmapi.CertificateRequest{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "r"}},
+		)
+
+		snap, err := ListForIngresses(ctx, c, testCR, testAnnotation)
+		if err != nil {
+			t.Fatalf("ListForIngresses() error = %v", err)
+		}
+		if len(snap.Certificates) != 0 || len(snap.Requests) != 0 || len(snap.Ingresses) != 0 {
+			t.Errorf("Snapshot = %+v, want empty (an empty scope must not list every namespace)", snap)
+		}
+	})
 }
 
 // TestCertStatusesIngresses covers attaching Ingress names to CertStatus.
