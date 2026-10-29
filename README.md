@@ -10,17 +10,16 @@ means past the renewal time cert-manager set for the certificate. Reports go out
 SMTP); webhook delivery is planned.
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
-one-time welcome message per report configuration explains this and proves delivery works. It is
-on `main` but not in the published beta yet.
+one-time welcome message per report configuration explains this and proves delivery works. It ships
+in the published beta (use `v0.1.0-beta.6` or newer).
 
 > [!NOTE]
 > **Status: beta, in development.** The API is still `v1alpha1` and can change between releases.
 > Install it with Helm from the published chart. The full path has run on a local kind cluster with
-> a fake mail server, installed from the repo's manifests: a `CertReport` becomes a CronJob, a run
+> a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
-> up on the `CertReport`. Not built yet: the webhook notifier. The welcome message is on `main` but not in the published beta. Real SMTP
-> authentication, STARTTLS and SES have only been tested with fakes, and installing from the
-> published chart has not been tested end to end yet. See [Status](#status),
+> up on the `CertReport`. Not built yet: the webhook notifier. Real SMTP
+> authentication and STARTTLS have run against Gmail; SES has only been tested with a fake. See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
@@ -42,13 +41,14 @@ flowchart LR
    `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
    to each notifier (only `Email` exists today). If there are none, it sends nothing.
 4. When a `CertReport` is first created, cyclops sends a one-time welcome message that explains
-   when cyclops emails you, with no findings in it. This also checks that delivery works. (On
-   `main`; the published beta does not send it yet.)
+   when cyclops emails you, with no findings in it. This also checks that delivery works.
 
 For certificates that are due, the report also shows cert-manager's own diagnostics (failed
 attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
-happening. For now these come from ACME issuers only; a certificate from a CA, Vault or
-self-signed issuer is listed without a reason.
+happening. A certificate from a CA, Vault or self-signed issuer has no ACME Order, so the report
+shows the CertificateRequest's `Ready` reason and, if the Issuer or ClusterIssuer is not ready,
+its error (for example a missing CA Secret) ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)).
+This is in `v0.1.0-beta.7`; in `v0.1.0-beta.6` only ACME issuers have a reason.
 
 ## Architecture
 
@@ -87,8 +87,7 @@ no finalizers are needed.
 1. A user creates the `CertReport`.
 2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
    `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
-   also creates a one-off welcome Job and tracks it in the `WelcomeSent` condition. (On `main`; not
-   in the published beta. See [Status](#status).)
+   also creates a one-off welcome Job and tracks it in the `WelcomeSent` condition.
 3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
 4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
    the report if anything needs attention.
@@ -132,10 +131,11 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Email sending: SES (`internal/email`) | Done, tested against a fake client |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
 | Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
-| Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done on `main`, unit- and envtest-tested (Job creation, success, failure, no retry of a failed Job). Not yet run on a real cluster, and not in the published beta. Own built-in template, overridable with the `welcome.html` key |
+| Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
+| Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.2`). It lints and renders; installing the published chart has not been tested end to end. [ADR 0016](docs/decisions/README.md) is still open (chart versioning, whether the kustomize manifests stay a second install path) |
-| Published image | `v0.1.0-beta.2`, for linux/amd64 and linux/arm64 |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.7`). It lints and renders, and installing and upgrading from the published chart have been run on kind. [ADR 0016](docs/decisions/README.md) is still open (chart versioning, whether the kustomize manifests stay a second install path) |
+| Published image | `v0.1.0-beta.7`, for linux/amd64 and linux/arm64 |
 | Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
@@ -187,9 +187,9 @@ make manifests generate
 ## Install the beta
 
 > [!WARNING]
-> `v0.1.0-beta.2` is a beta. It has no welcome message (it is on `main`) and no webhook (see [Status](#status)).
-> Real SMTP authentication, STARTTLS and SES have only been tested with fakes, and installing from
-> the published chart has not been tested end to end yet. Try it on a non-production cluster first,
+> `v0.1.0-beta.7` is a beta. It has no webhook (see [Status](#status)). Use `beta.6` or newer: `beta.5`
+> crash-loops on startup.
+> Real SMTP authentication and STARTTLS have run against Gmail; SES has only been tested with a fake. Try it on a non-production cluster first,
 > or on kind with [the section below](#try-it-on-kind).
 
 **Prerequisites:** a cluster with [cert-manager](https://cert-manager.io) installed, `kubectl`, and
@@ -214,7 +214,7 @@ kubectl -n cyclops-system create secret generic cyclops-mail-credentials \
 `CertReport` only says who gets the email:
 
 ```sh
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.2 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.7 \
   --namespace cyclops-system \
   --set email.smtp.host=smtp.example.com \
   --set email.smtp.credentialsSecretName=cyclops-mail-credentials   # leave out if no login is needed
@@ -270,7 +270,7 @@ A healthy cluster logs "nothing to report" and sends no email. That is by design
 
 **Without Helm.** The kustomize manifests in `config/` still work: follow
 [Deploying your own build](#deploying-your-own-build), using the published image
-(`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.2`) instead of building one. Whether they stay a
+(`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7`) instead of building one. Whether they stay a
 second supported install path is not decided ([ADR 0016](docs/decisions/README.md)).
 
 ### When a report run fails
@@ -395,7 +395,7 @@ nothing. Remove everything with `kind delete cluster --name cyclops`.
 ## Deploying your own build
 
 To run a build of your own instead of the published image (or to deploy the published image from
-the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.2` and
+the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7` and
 skip the build and push line):
 
 ```sh
@@ -433,7 +433,7 @@ kubectl get certreport <name> -o jsonpath='{.status.conditions}'
 
 > [!NOTE]
 > The path has been run end to end only on kind with an unauthenticated fake SMTP server. Real
-> SMTP authentication, STARTTLS and SES have only been tested with fakes, so expect rough edges.
+> SMTP authentication and STARTTLS have run against Gmail, and SES has only been tested with a fake, so expect rough edges.
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 

@@ -339,13 +339,8 @@ a new ADR.
 
 ## Not built yet
 
-- **Sending** (`internal/email`), partly built. The types, signatures, env variable names and
-  tests are in place (strict STARTTLS, no skip-verify, CR/LF rejection, quoted-printable body;
-  ADR 0014). The tests in the package are the spec: they run the SMTP sender against an
-  in-process fake server with real TLS, and the SES sender against a fake client.
-  - Done: `parse`/`parseAddress` (CR/LF rejection), `NewSMTP` (validation and port/TLS
-    defaults), `tlsConfig`, `buildMIME`, `messageID`, `SMTP.Send` (all three TLS modes, AUTH,
-    deadline and cancellation), the SES sender and `FromEnv`.
-- **Custom templates** from a ConfigMap (ADR 0005), which needs the `CertReport` schema.
-- **Report mode** in `cmd/main.go`, which wires `List` → `Evaluate` → render → send (ADR 0006).
+- **Webhook notifier** (ADR 0017). The design is open; email is the only notifier.
+- **Real mail providers.** SMTP authentication, STARTTLS and SES have only been run against
+  fakes: the in-process SMTP server and fake SES client in the package tests, and a fake mail
+  server on kind.
 - **Dedup** across days is an open decision and may change what `Evaluate` returns.

@@ -4,7 +4,7 @@ Installs the cyclops controller, its CRD (`CertReport`), RBAC, and the install-l
 (ADR 0014). **Beta (v1alpha1).** The chart is published to GHCR as an OCI chart:
 
 ```bash
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.2 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.7 \
   -n cyclops-system --create-namespace \
   --set email.smtp.host=smtp.example.com
 ```
@@ -86,9 +86,8 @@ What is fixed:
 
 Recommendations, not requirements:
 - Keep styling **inline** (`style="..."`). Email clients ignore `<style>` blocks and scripts.
-- Keep the **empty-findings branch**. A day with nothing to report must still render, and the
-  welcome email planned in ADR 0015 will use the same template.
-- Keep `.Reason` and `.State`, since they are the only place cert-manager's own diagnostics appear.
+- Keep the **empty-findings branch**. A day with nothing to report must still render.
+- Keep `.Reason`, `.State` and `.IssuerError`, since they are the only place cert-manager's own diagnostics appear.
 
 ### Template language
 
