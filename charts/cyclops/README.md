@@ -16,6 +16,31 @@ Secret yourself in the release namespace and reference it by name (`email.smtp.c
 with keys `username`/`password`, or `email.ses.credentialsSecretName` with keys
 `access-key-id`/`secret-access-key`; for SES, leave it empty to use IRSA or Pod Identity).
 
+## Create a CertReport
+
+The chart installs the `CertReport` CRD but no `CertReport`: that is where you say when to look, which
+namespaces to cover, and who to tell. `helm install` prints a complete, commented example at the end
+(it is [`files/certreport-example.yaml`](files/certreport-example.yaml) in this chart). The smallest
+valid one is:
+
+```yaml
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata: {name: cluster-certs}
+spec:
+  notifiers:
+    - type: Email
+      email: {from: cyclops@example.com, to: [platform@example.com]}
+```
+
+Everything else has a default (every namespace, daily at 08:00 UTC). Every field, its default and its
+rules are described in the cluster itself, generated from the CRD, so they cannot go stale:
+
+```bash
+kubectl explain certreport.spec
+kubectl explain certreport.spec.notifiers
+```
+
 ## Customising the email
 
 The chart ships the built-in template as [`files/default.html.tmpl`](files/default.html.tmpl) and

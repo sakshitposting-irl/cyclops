@@ -41,6 +41,7 @@ read-only.
 | `api/v1alpha1/zz_generated.deepcopy.go` | `make generate` |
 | `charts/cyclops/templates/crd.yaml` | `make helm-crd` |
 | `charts/cyclops/files/default.html.tmpl` | `make helm-crd` (copied from `internal/render/default.html.tmpl`) |
+| `charts/cyclops/files/certreport-example.yaml` | `make helm-crd` (copied from `config/samples/cyclops_v1alpha1_certreport.yaml`, which the CRD test validates) |
 | `PROJECT` | the kubebuilder CLI |
 
 After editing `api/v1alpha1/*_types.go` or any `+kubebuilder` marker, run `make manifests generate`

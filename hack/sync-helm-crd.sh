@@ -2,7 +2,8 @@
 # Syncs generated and shared sources into the Helm chart (run via `make helm-crd`):
 #   - the generated CRD, wrapped in a template gated by crd.enabled and optionally annotated
 #     helm.sh/resource-policy: keep (crd.keep);
-#   - the built-in email templates (report and welcome), so chart-only users can see and edit them.
+#   - the built-in email templates (report and welcome), so chart-only users can see and edit them;
+#   - the sample CertReport, which `helm install` prints so a chart-only user sees the shape of the CR.
 # Never edit the chart's copies by hand; they are overwritten.
 set -euo pipefail
 
@@ -19,3 +20,4 @@ crd_dst=charts/cyclops/templates/crd.yaml
 
 cp internal/render/default.html.tmpl charts/cyclops/files/default.html.tmpl
 cp internal/render/default-welcome.html.tmpl charts/cyclops/files/default-welcome.html.tmpl
+cp config/samples/cyclops_v1alpha1_certreport.yaml charts/cyclops/files/certreport-example.yaml

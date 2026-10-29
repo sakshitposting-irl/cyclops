@@ -7,6 +7,16 @@ Credentials Secret: {{ . }} (create it in {{ $.Release.Namespace }} if it does n
 No credentials Secret configured.
 {{- end }}
 
-Create a CertReport to start receiving reports:
+Nothing is reported until you create a CertReport. Save this as certreport.yaml, edit the
+addresses, and apply it:
+
+{{ .Files.Get "files/certreport-example.yaml" | indent 2 }}
+Every field is described in the cluster itself:
+
+  kubectl explain certreport.spec
+  kubectl explain certreport.spec.notifiers
+
+Then check it:
 
   kubectl get certreports
+  kubectl describe certreport cluster-certs

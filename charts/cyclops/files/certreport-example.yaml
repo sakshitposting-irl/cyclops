@@ -1,0 +1,27 @@
+# A CertReport says when cyclops looks at your certificates, which ones, and who is told.
+# Edit the addresses, then apply it:  kubectl apply -f certreport.yaml
+#
+# Every field is described in the cluster itself, so you never need this file to be current:
+#   kubectl explain certreport.spec
+#   kubectl explain certreport.spec.notifiers
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata:
+  name: cluster-certs          # cluster-scoped, so there is no namespace
+spec:
+  schedule: "0 8 * * *"        # cron, in UTC (this is the default)
+  namespaces: [prod, staging]  # leave out, or leave empty, to cover every namespace
+  # Or cover only the Ingresses annotated for this CertReport (cannot be combined with namespaces):
+  # ingressAnnotationMode: true
+  notifiers:                   # at least one
+    - type: Email
+      email:
+        from: cyclops@example.com
+        to: [platform@example.com]
+  # Optional, shown with their defaults:
+  # suspend: false
+  # startingDeadlineSeconds: 3600
+  # successfulJobsHistoryLimit: 3
+  # failedJobsHistoryLimit: 1
+  # backoffLimit: 0
+  # emailTemplateConfigMapRef: {name: my-template, key: template.html}   # a custom email template

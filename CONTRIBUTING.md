@@ -52,7 +52,9 @@ Generated files are checked in, so regenerate them when you change what they com
 - After editing `api/v1alpha1/*_types.go` or any `+kubebuilder` marker: `make manifests generate`.
 - After that, or after editing `internal/render/default.html.tmpl`: `make helm-crd` to refresh the
   chart's CRD and template copies. Don't edit `charts/cyclops/templates/crd.yaml` or
-  `charts/cyclops/files/default.html.tmpl` by hand.
+  `charts/cyclops/files/default.html.tmpl` by hand. The same goes for
+  `charts/cyclops/files/certreport-example.yaml`: edit `config/samples/cyclops_v1alpha1_certreport.yaml`
+  (the CRD test validates it) and run `make helm-crd`.
 - Chart changes: `make helm-lint`.
 
 ## Making a change
