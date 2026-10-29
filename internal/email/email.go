@@ -52,7 +52,19 @@ type InlineImage struct {
 	ContentID string
 	// ContentType is the MIME type, e.g. "image/png".
 	ContentType string
-	Data        []byte
+	// FileName is shown by mail clients for the part. Empty means the ContentID plus an
+	// extension taken from ContentType.
+	FileName string
+	Data     []byte
+}
+
+// fileName returns the name sent with the image. Without one, Gmail labels the part "noname".
+func (i InlineImage) fileName() string {
+	if i.FileName != "" {
+		return i.FileName
+	}
+	ext := map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif"}[i.ContentType]
+	return i.ContentID + ext
 }
 
 // Sender delivers a Message. Implementations: SMTP and SES.
@@ -79,7 +91,7 @@ func parse(msg Message) (parsedMessage, error) {
 		if img.ContentID == "" || img.ContentType == "" {
 			return parsedMessage{}, errors.New("email: inline image needs a ContentID and ContentType")
 		}
-		if strings.ContainsAny(img.ContentID+img.ContentType, escapeChar) {
+		if strings.ContainsAny(img.ContentID+img.ContentType+img.FileName, escapeChar) {
 			return parsedMessage{}, errors.New("email: inline image header contains CR or LF")
 		}
 	}

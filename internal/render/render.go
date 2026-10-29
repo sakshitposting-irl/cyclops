@@ -57,7 +57,7 @@ func InlineImages(body string) []email.InlineImage {
 	if !strings.Contains(body, "cid:"+logoContentID) {
 		return nil
 	}
-	return []email.InlineImage{{ContentID: logoContentID, ContentType: "image/png", Data: logoPNG}}
+	return []email.InlineImage{{ContentID: logoContentID, ContentType: "image/png", FileName: "cyclops-logo.png", Data: logoPNG}}
 }
 
 //go:embed default-welcome.html.tmpl

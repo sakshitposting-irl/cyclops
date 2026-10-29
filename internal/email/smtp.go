@@ -337,11 +337,12 @@ func writeRelated(buf *bytes.Buffer, pm parsedMessage) error {
 	}
 
 	for _, img := range pm.Inline {
+		name := img.fileName()
 		part, err := mw.CreatePart(textproto.MIMEHeader{
-			"Content-Type":              {img.ContentType},
+			"Content-Type":              {mime.FormatMediaType(img.ContentType, map[string]string{"name": name})},
 			"Content-Transfer-Encoding": {"base64"},
 			"Content-ID":                {"<" + img.ContentID + ">"},
-			"Content-Disposition":       {"inline"},
+			"Content-Disposition":       {mime.FormatMediaType("inline", map[string]string{"filename": name})},
 		})
 		if err != nil {
 			return err

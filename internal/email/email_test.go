@@ -221,6 +221,7 @@ func TestParseInline(t *testing.T) {
 		{name: "empty ContentID", img: InlineImage{ContentType: testPNG}, wantErr: true},
 		{name: "empty ContentType", img: InlineImage{ContentID: testLogoID}, wantErr: true},
 		{name: "CRLF in ContentID", img: InlineImage{ContentID: "a\r\nBcc: evil@example.com", ContentType: testPNG}, wantErr: true},
+		{name: "CRLF in FileName", img: InlineImage{ContentID: testLogoID, ContentType: testPNG, FileName: "a.png\r\nBcc: evil@example.com"}, wantErr: true},
 		{name: "bare LF in ContentType", img: InlineImage{ContentID: testLogoID, ContentType: "image/png\nBcc: evil@example.com"}, wantErr: true},
 	}
 	for _, tt := range tests {

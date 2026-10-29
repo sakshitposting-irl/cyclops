@@ -104,8 +104,7 @@ func (s *SES) Send(ctx context.Context, msg Message) error {
 	var attachments []types.Attachment
 	for _, img := range pm.Inline {
 		attachments = append(attachments, types.Attachment{
-			// SES requires a file name; the ContentID is the only name the image has.
-			FileName:                aws.String(img.ContentID),
+			FileName:                aws.String(img.fileName()),
 			RawContent:              img.Data, // the SDK base64-encodes it for us
 			ContentId:               aws.String(img.ContentID),
 			ContentType:             aws.String(img.ContentType),

@@ -373,9 +373,11 @@ func TestBuildMIMEInline(t *testing.T) {
 	msg.HTMLBody = `<img src="cid:one"><img src="cid:two"><p>läuft ab ` + strings.Repeat("x", 2000) + "</p>"
 	images := []InlineImage{
 		// 160 bytes encode to more than 76 base64 characters, so this one has to be wrapped.
-		{ContentID: testImageID, ContentType: testPNG, Data: bytes.Repeat([]byte{0x89, 'P', 'N', 'G'}, 40)},
+		{ContentID: testImageID, ContentType: testPNG, FileName: "logo.png", Data: bytes.Repeat([]byte{0x89, 'P', 'N', 'G'}, 40)},
+		// No FileName: Gmail labels a part without one "noname", so it falls back to the ContentID plus ".jpg".
 		{ContentID: "two", ContentType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
 	}
+	wantNames := []string{"logo.png", "two.jpg"}
 	msg.Inline = images
 
 	pm, err := parse(msg)
@@ -423,33 +425,12 @@ func TestBuildMIMEInline(t *testing.T) {
 		t.Errorf("HTML part doesn't round-trip (%v)", err)
 	}
 
-	for _, want := range images {
+	for i, want := range images {
 		part, err := mr.NextPart()
 		if err != nil {
 			t.Fatalf("part for %q: %v", want.ContentID, err)
 		}
-		if got := part.Header.Get("Content-ID"); got != "<"+want.ContentID+">" {
-			t.Errorf("Content-ID = %q, want <%s>", got, want.ContentID)
-		}
-		if got := part.Header.Get("Content-Type"); got != want.ContentType {
-			t.Errorf("%s Content-Type = %q, want %q", want.ContentID, got, want.ContentType)
-		}
-		if got := part.Header.Get("Content-Disposition"); got != "inline" {
-			t.Errorf("%s Content-Disposition = %q, want inline", want.ContentID, got)
-		}
-		encoded, err := io.ReadAll(part)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for line := range strings.SplitSeq(string(encoded), "\r\n") {
-			if len(line) > 76 {
-				t.Errorf("%s: base64 line of %d characters, want at most 76", want.ContentID, len(line))
-			}
-		}
-		got, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(string(encoded), "\r\n", ""))
-		if err != nil || !bytes.Equal(got, want.Data) {
-			t.Errorf("%s doesn't round-trip (%v)", want.ContentID, err)
-		}
+		checkInlinePart(t, part, want, wantNames[i])
 	}
 	if _, err := mr.NextPart(); err != io.EOF {
 		t.Errorf("another part after the images, or a missing closing boundary: %v", err)
@@ -458,6 +439,36 @@ func TestBuildMIMEInline(t *testing.T) {
 	// falling through to the plain path would append a second Content-Type and body.
 	if closing := "\r\n--" + params["boundary"] + "--\r\n"; !strings.HasSuffix(string(b), closing) {
 		t.Errorf("message doesn't end with the closing boundary; ends with %q", string(b[max(0, len(b)-60):]))
+	}
+}
+
+// checkInlinePart checks one image part of a multipart/related message: its headers, the
+// 76-character base64 lines, and that the body decodes back to the image.
+func checkInlinePart(t *testing.T, part *multipart.Part, want InlineImage, wantName string) {
+	t.Helper()
+	if got := part.Header.Get("Content-ID"); got != "<"+want.ContentID+">" {
+		t.Errorf("Content-ID = %q, want <%s>", got, want.ContentID)
+	}
+	partType, typeParams, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+	if err != nil || partType != want.ContentType || typeParams["name"] != wantName {
+		t.Errorf("%s Content-Type = %q, want %s with name=%s (%v)", want.ContentID, part.Header.Get("Content-Type"), want.ContentType, wantName, err)
+	}
+	disposition, dispParams, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+	if err != nil || disposition != "inline" || dispParams["filename"] != wantName {
+		t.Errorf("%s Content-Disposition = %q, want inline with filename=%s (%v)", want.ContentID, part.Header.Get("Content-Disposition"), wantName, err)
+	}
+	encoded, err := io.ReadAll(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(encoded), "\r\n") {
+		if len(line) > 76 {
+			t.Errorf("%s: base64 line of %d characters, want at most 76", want.ContentID, len(line))
+		}
+	}
+	got, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(string(encoded), "\r\n", ""))
+	if err != nil || !bytes.Equal(got, want.Data) {
+		t.Errorf("%s doesn't round-trip (%v)", want.ContentID, err)
 	}
 }
 
