@@ -7,19 +7,20 @@ becomes an outage.
 
 cyclops is a Kubernetes controller that watches cert-manager `Certificate` resources. "Overdue"
 means past the renewal time cert-manager set for the certificate. Reports go out by email (SES or
-SMTP); webhook delivery is planned.
+SMTP); a Slack webhook notifier is planned.
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
 one-time welcome message per report configuration explains this and proves delivery works. It ships
-in the published beta (use `v0.1.0-beta.6` or newer).
+in the published beta (use `v0.1.0-beta.7` or newer).
 
 > [!NOTE]
 > **Status: beta, in development.** The API is still `v1alpha1` and can change between releases.
 > Install it with Helm from the published chart. The full path has run on a local kind cluster with
 > a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
-> up on the `CertReport`. Not built yet: the webhook notifier. Real SMTP
-> authentication and STARTTLS have run against Gmail; SES has not been run against real AWS (only against a fake client). See [Status](#status),
+> up on the `CertReport`. Not built yet: the Slack webhook notifier (decided, in
+> [ADR 0017](docs/decisions/0017-webhook-notifier.md)). SMTP with a login has also run against
+> Gmail, with STARTTLS on port 587 and TLS on port 465; SES has not been run against real AWS (only against a fake client). See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
 ## How it works
@@ -130,11 +131,11 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
-| Webhook sending | Not started; design open ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) |
+| Slack notifier | Not built. Decided in [ADR 0017](docs/decisions/0017-webhook-notifier.md): `type: Slack`, one Secret per webhook, Slack's native format. Only the `webhooks.Sender` interface exists. A generic webhook and Teams are not decided |
 | Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
 | Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.7`). It lints and renders, and installing and upgrading from the published chart have been run on kind. [ADR 0016](docs/decisions/README.md) is still open (chart versioning, whether the kustomize manifests stay a second install path) |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.7`). It lints and renders, and installing and upgrading from the published chart have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
 | Published image | `v0.1.0-beta.7`, for linux/amd64 and linux/arm64 |
 | Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
@@ -271,7 +272,7 @@ A healthy cluster logs "nothing to report" and sends no email. That is by design
 **Without Helm.** The kustomize manifests in `config/` still work: follow
 [Deploying your own build](#deploying-your-own-build), using the published image
 (`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7`) instead of building one. Whether they stay a
-second supported install path is not decided ([ADR 0016](docs/decisions/README.md)).
+second supported install path is not decided ([ADR 0016](docs/decisions/0016-packaging.md)).
 
 ### When a report run fails
 

@@ -16,7 +16,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 4 | Failure diagnostics: structured fields + raw `Reason` passthrough, no message categorization | [0004-failure-diagnostics.md](0004-failure-diagnostics.md) |
 | 5 | Email templating: default `html/template`, overridable via ConfigMap reference, or chart-wide via `--default-template-configmap` (amendment) | [0005-email-templating.md](0005-email-templating.md) |
 | 6 | Scheduling model: controller reconciles CR and owns a child `CronJob` | [0006-scheduling-model.md](0006-scheduling-model.md) |
-| 7 | Notification channels: typed `notifiers` list in the CRD; v1 ships both `Email` and `Webhook` (revised; originally webhook was deferred to v2) | [0007-notification-channels.md](0007-notification-channels.md) |
+| 7 | Notification channels: typed `notifiers` list in the CRD; `Email` plus a webhook channel (revised: originally webhook was deferred to v2; amended 2026-10-30: Slack is its own `type: Slack`, and a generic `type: Webhook` is open, see 17) | [0007-notification-channels.md](0007-notification-channels.md) |
 | 8 | Email providers: both SES and SMTP in v1 | [0008-email-providers.md](0008-email-providers.md) |
 | 9 | Report inclusion: by dates only; failure diagnostics shown but never cause inclusion (threshold superseded by 12) | [0009-report-inclusion.md](0009-report-inclusion.md) |
 | 10 | Watch scope: `spec.namespaces` list (empty = all); read-only ClusterRole (missing-namespace handling superseded by 11) | [0010-watch-scope.md](0010-watch-scope.md) |
@@ -25,50 +25,27 @@ works is described in [`../internals/`](../README.md#internals).
 | 13 | Template data: flat `TemplateData`/`Row` contract for all templates; additive changes only | [0013-template-data.md](0013-template-data.md) |
 | 14 | Email delivery: SES/SMTP settings set once per install (Helm values → ConfigMap); credentials in hand-made Secrets in the cyclops namespace, injected as env vars; SES ambient-first; strict STARTTLS; `CredentialsFound` condition (supersedes per-notifier provider in 8) | [0014-notifier-credentials.md](0014-notifier-credentials.md) |
 | 15 | Scheduled runs email only when something needs attention; each `CertReport` gets a one-time welcome email (explanation only, with its own built-in template, overridable by the `welcome.html` key of the template ConfigMap; findings come in the scheduled run's own email), sent by a one-off Job, with state in a small owned ConfigMap | [0015-email-policy.md](0015-email-policy.md) |
+| 16 | Packaging: a hand-written Helm chart at `charts/cyclops`, the supported install path, published as an OCI artifact to GHCR with its version taken from the release tag. Whether `config/` stays a second install path is open | [0016-packaging.md](0016-packaging.md) |
+| 17 | Slack notifier (partly decided; a generic webhook and Teams are open): `type: Slack` with Slack's native format; one Secret per webhook in the cyclops namespace, injected as an env var named from the target's `name`; posts like email (findings only, plus a welcome); retries inside the process; long reports split into several messages | [0017-webhook-notifier.md](0017-webhook-notifier.md) |
 | 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
 | 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch) | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
 | 20 | Ingress annotation mode: opt-in per CR (`spec.ingressAnnotationMode`, exclusive with `namespaces`); Ingresses join a CR with one annotation and map to Certificates by `secretName`; no cross-tenant guard in v1 (revises 10's RBAC) | [0020-ingress-annotation-mode.md](0020-ingress-annotation-mode.md) |
 | 21 | Non-ACME failure diagnostics: the newest CertificateRequest's and the Issuer's/ClusterIssuer's `Ready` condition, verbatim; the report Pod reads Issuers and ClusterIssuers (revises 10's RBAC) | [0021-issuer-diagnostics.md](0021-issuer-diagnostics.md) |
+| 22 | No cross-day dedup: every scheduled run reports every certificate that meets the inclusion rule, with no per-certificate state | [0022-no-dedup.md](0022-no-dedup.md) |
 
 ## Open / not yet decided
 
-- Packaging (ADR 0016): ship a Helm chart as the supported install path.
-  ADR 0014 depends on it for `values.yaml` and `values.schema.json`. The
-  project currently deploys with kubebuilder's kustomize `config/`, and
-  kubebuilder's helm plugin can generate a chart from it. Deferred until
-  the report/controller code is done. Findings so far:
-  - **Plugin test:** kubebuilder 4.16 `helm/v2-alpha`, run on a scratch
-    clone. On a plain regenerate it overwrites its own generated templates
-    (manager, rbac, crd) and keeps `values.yaml`, our own template
-    directories and `values.schema.json`. `--force` also resets
-    `values.yaml`.
-  - **CRDs:** it already puts them in `templates/` with `crd.enabled` and
-    `crd.keep` (`helm.sh/resource-policy: keep`).
-  - **Leaning towards:**
-    - the chart in this repo, at `charts/cyclops`;
-    - Helm as the only install path;
-    - OCI publishing to GHCR.
-  - **Started:** a hand-written chart at `charts/cyclops` mirrors the
-    kustomize install (same RBAC, flags and names with the release prefix)
-    and implements ADR 0014's values and `values.schema.json`. The CRD
-    template is copied from `config/crd/bases` by `make helm-crd`. Not yet
-    decided: OCI publishing, chart versioning, and whether kustomize `config/`
-    stays as a second install path.
-- State & dedup: how to avoid re-alerting on the same cert every single day
-  once it's reported, and where that state lives. ADR 0015 settles the
-  empty-report part (no email; a one-time welcome instead) and adds a
-  per-`CertReport` state ConfigMap that may be the natural place for dedup
-  state too.
-- Webhook notifier specifics (v1, ADR 0007): the questions and options are
-  parked in [0017-webhook-notifier.md](0017-webhook-notifier.md). They
-  cover:
-  - where the URL and credentials live;
-  - whether ADR 0015 applies;
-  - auth;
-  - retries (these affect email Jobs too);
-  - Slack/Teams payload formats (may reopen ADR 0007's generic-schema
-    decision);
-  - the JSON schema.
+- Install paths (ADR 0016): whether the kustomize manifests in `config/`
+  stay a second supported install path, or are development tooling only. The
+  Helm chart itself is decided.
+- Webhook notifier specifics (ADR 0007): the Slack notifier is decided in
+  [0017-webhook-notifier.md](0017-webhook-notifier.md) (`type: Slack`, one
+  Secret per webhook, env var named from the target's `name`, retries in the
+  process, long reports split). Still open there:
+  - the exact CRD field names;
+  - who may use which Secret;
+  - a generic `type: Webhook`, its JSON schema, auth, and Teams;
+  - email's Job retry settings following the retry decision.
 - HA / leader election posture for the controller (the reconciler managing
   the CronJob is lightweight, but still worth deciding explicitly).
 - Observability: metrics/logging expectations. Since ADR 0015 means no
@@ -77,6 +54,40 @@ works is described in [`../internals/`](../README.md#internals).
   the `CertReport` driven by the Jobs it owns.
   This also settles what `CertReport.status` holds beyond conditions (ADR 0018
   question 8), and whether `kubectl get` gets a health column.
+
+## Where we stopped (2026-10-30): `v0.1.0-beta.7` is published and has been run against Gmail
+
+Notes as written at the end of the day, not new decisions. The two sections below are older and
+are kept as they were written.
+
+**Published.** `v0.1.0-beta.7`: image `ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7` (amd64 and
+arm64) and chart `oci://ghcr.io/sakshitposting-irl/charts/cyclops` version `0.1.0-beta.7`. Use it
+instead of `beta.5` (crash-loops on startup) and `beta.6` (no issuer diagnostics).
+
+**Run on kind (`kind-cyclops`) against real Gmail SMTP, from the published chart.**
+- Welcome email and findings email delivered with STARTTLS on port 587 and with TLS on port 465.
+- Failure path: a bad SMTP host gives `WelcomeSent=False` (reason `JobFailed`) plus one Warning
+  Event, no state ConfigMap, and no retry after the host is fixed and the controller restarted.
+- Not confirmed in an inbox: the ADR 0021 issuer lines in a delivered findings email.
+- SES has not been run against real AWS; there is no AWS account. Only the fake client has run.
+
+**Decided since the notes below.** Packaging, [ADR 0016](0016-packaging.md) (Helm chart, OCI on
+GHCR); no dedup, [ADR 0022](0022-no-dedup.md); the Slack notifier, [ADR 0017](0017-webhook-notifier.md)
+(partly: a generic webhook and Teams are open).
+
+**Done since `beta.7`, to ship in the next release.**
+- `golang.org/x/net` and OpenTelemetry bumped past the `govulncheck` findings (0 affecting).
+- The inline logo now has a file name, so Gmail no longer labels it "noname".
+- The unused webhook server and cross-build `make` targets are removed.
+- `AGENTS.md` is a project guide and is no longer ignored, so contributors can use it.
+- `helm install` prints a commented `CertReport` example and the `kubectl explain` commands.
+
+**Next.**
+- The Slack notifier ([ADR 0017](0017-webhook-notifier.md)). Only the `webhooks.Sender`
+  interface exists. The CRD fields, the sender, the env var wiring and report mode are not built.
+- Check the mail score of the email (HTML only, no `text/plain` part; adding one touches ADR
+  0005 and 0013 and is not decided).
+- Still manual-only: `test.yml` and `lint.yml`. Tidy the old `beta.3` and `beta.4` tags.
 
 ## Where we stopped (2026-10-28): `v0.1.0-beta.5` is published, nothing tested on a cluster yet
 
@@ -149,9 +160,10 @@ Notes as written at the end of the day, not new decisions.
 - Still to do: see the 2026-10-28 notes above. `.Namespaces` is empty both for "every namespace" and for Ingress annotation mode, so the
   welcome text hedges; an additive `IngressAnnotationMode` field would fix that.
 
-**Webhook** ([ADR 0017](0017-webhook-notifier.md): open)
-- None of its six questions is decided (URL and credential location, whether ADR 0015 applies,
-  auth, retries, Slack/Teams payloads, JSON schema).
+**Webhook** ([ADR 0017](0017-webhook-notifier.md): Slack decided, 2026-10-30)
+- `type: Slack`, with Slack's native format. One Secret per webhook in the cyclops namespace, the
+  URL under the key `url`, reaching the report Pod as an env var named from the target's `name`.
+- Still open: the CRD field names, who may use which Secret, a generic `type: Webhook` and Teams.
 - Retries (question 4) also affect the email Jobs: `backoffLimit` is 0 today.
 
 **Release scope: proposed, not confirmed.** A first workable `v0.1.0` that is email-only:
