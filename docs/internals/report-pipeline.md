@@ -339,8 +339,10 @@ a new ADR.
 
 ## Not built yet
 
-- **Webhook notifier** (ADR 0017). The design is open; email is the only notifier.
-- **Real mail providers.** SMTP authentication, STARTTLS and SES have only been run against
-  fakes: the in-process SMTP server and fake SES client in the package tests, and a fake mail
-  server on kind.
-- **Dedup** across days is an open decision and may change what `Evaluate` returns.
+- **Slack notifier** (ADR 0017). The design is decided; only the `webhooks.Sender` interface
+  exists, and email is the only notifier that sends.
+- **SES against real AWS.** SES has only been run against the fake client in the package tests.
+  SMTP, with STARTTLS on port 587 and TLS on port 465, has run against Gmail.
+
+There is no dedup across days (ADR 0022): `Evaluate` returns every certificate that meets the
+inclusion rule, on every run.

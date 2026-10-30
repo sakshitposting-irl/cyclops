@@ -2,8 +2,8 @@
 
 ## Status
 Decided. Settles the "is an email sent when there's nothing to report"
-part of the state & dedup open item. How to avoid re-alerting on the same
-certificate every day is still open.
+part of the state & dedup open item. Re-alerting on the same certificate
+every day is settled in [ADR 0022](0022-no-dedup.md): there is no dedup.
 
 Welcome email built (2026-10-27); not yet run on a real cluster.
 
@@ -166,6 +166,5 @@ Controller, a Role in its own namespace:
   inbox. Failed runs have to show up elsewhere: Job status, and ideally a
   condition on the `CertReport` driven by the Jobs it owns. This belongs to
   the observability open item.
-- **The per-`CertReport` state ConfigMap** is where dedup state (the
-  remaining open part of state & dedup) could also live. That's for that
-  decision to settle.
+- **The per-`CertReport` state ConfigMap** holds only the welcome record.
+  ADR 0022 decided there is no dedup state to keep.

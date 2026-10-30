@@ -85,7 +85,7 @@ The one-time welcome email has its own built-in template. A custom one is read f
 without any reference, the built-in welcome template is used. No `CertReport` field is added.
 
 ## Amendment: chart-wide default template
-Status: decided with the Helm chart ([ADR 0016](README.md), still open).
+Status: decided with the Helm chart ([ADR 0016](0016-packaging.md)).
 
 A Helm-only user edits the template in the chart and expects it to apply, but the reference
 above is per `CertReport`. The controller now has `--default-template-configmap=<name>`, which

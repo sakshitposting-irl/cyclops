@@ -152,7 +152,7 @@ Not decided yet. Shape of the argument:
 **Report Job (one-shot pod):**
 - Must **not** use the manager or leader election. Single process: runs, exits. With
   `concurrencyPolicy: Forbid` on the CronJob, Kubernetes guarantees no overlap, which is the real
-  dedup boundary for "did we send this email twice" (ties to the open "state & dedup" item).
+  dedup boundary for "did we send this email twice". There is no dedup across days (ADR 0022).
 
 Lean: keep leader election on, `replicas: 1`, enable `ReleaseOnCancel: true`, and record it as a
 short ADR.

@@ -60,8 +60,8 @@ type Row struct {
   (`{{ .NotAfter.Format "2006-01-02" }}`); UTC keeps the email independent
   of the Job's timezone.
 - **An empty `Findings` still renders** (an "all clear" body). Whether an
-  email is sent when there's nothing to report is decided with sending and
-  the open dedup item, not here.
+  email is sent when there's nothing to report is decided in ADR 0015, not
+  here.
 - **The subject line is set in code**, not by the template, e.g.
   `[cyclops] 2 certificates need attention`.
 

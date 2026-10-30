@@ -82,4 +82,4 @@ Option A.
 - Gateway API (`HTTPRoute`/`Gateway`) is out of scope for v1.
 - The report Pod needs `get/list` on Ingresses too, so its service account's
   permissions must include them (`config/rbac` and the Helm chart).
-- Does not change dedup (ADR 0015) or observability.
+- Does not change dedup (ADR 0022) or observability.
