@@ -5,6 +5,11 @@ Decided. The v1 scope was revised: webhook delivery now ships in v1
 alongside email (see "v1 scope" below). The list structure and the webhook
 payload decision are unchanged.
 
+Amended (2026-10-30): Slack is a typed notifier of its own, `type: Slack`,
+with Slack's native payload format (ADR 0017). The fixed, versioned JSON
+schema below still describes a generic `type: Webhook`; whether and when
+that ships is open.
+
 ## Context
 The project should eventually support both email and webhook delivery.
 Two questions: how do multiple channels coexist in the CRD, and what's
