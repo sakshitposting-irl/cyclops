@@ -1,7 +1,8 @@
 # 17. Webhook notifier specifics
 
 ## Status
-Partly decided (2026-10-30). The Slack notifier is decided, in "Decided: the
+Partly decided (2026-10-30; the CRD shape and the welcome on a Secret change
+added 2026-11-02). The Slack notifier is decided, in "Decided: the
 Slack notifier" below. The questions under "Open questions" keep their
 original options as a record, and each says whether Slack settled it. What
 is still open is under "Still open". Where an option is marked *(leaning)*,
@@ -96,17 +97,58 @@ own with Slack's native payload format (ADR 0007 is amended to match).
   which masks secret addresses where errors surface and redacts them as
   `scheme://host/***`.
 
+- **The CRD shape** (decided 2026-11-02, the sketch as it stood):
+  ```yaml
+  notifiers:
+    - type: Slack
+      slack:
+        targets:
+          - name: oncall
+            urlSecretRef: {name: slack-oncall}   # key fixed as `url`
+  ```
+  - `targets` is a map list keyed by `name` (1 to 20 items). A `name` is 1
+    to 63 characters of lowercase letters, digits and `-`. A Secret name is
+    a DNS subdomain.
+  - A CEL rule on the spec makes names unique across all the Slack
+    notifiers of a `CertReport`. To keep that rule within the API server's
+    cost budget, `notifiers` now has `maxItems: 10` (ADR 0018 set only
+    `minItems: 1`).
+  - Why a `urlSecretRef` object rather than a plain `secretName` string:
+    it matches `emailTemplateConfigMapRef`, and a field can be added to it
+    later (a different key, say) without breaking the API.
+- **Checking the Secrets.** Each target's Secret is checked into the
+  existing `CredentialsFound` condition (as question 1, option A, said),
+  reasons `SecretNotFound` and `SecretKeyMissing`, naming the target. The
+  mail credentials Secret is now checked only for a `CertReport` with an
+  Email notifier, so a webhook-only report does not wait on mail settings.
+  Likewise the Helm chart's email settings are optional (2026-11-02): with
+  no SMTP host or SES region it installs no mail ConfigMap, and a
+  `CertReport` with an Email notifier fails its runs saying email is not
+  configured.
+- **The Pod's env var references are optional.** With a required one, a
+  missing Secret holds the Pod in `CreateContainerConfigError`, and with
+  `concurrencyPolicy: Forbid` that stuck run blocks every later one.
+  Optional, the run starts and fails with a message naming the target.
+- **A changed Secret sends a new welcome** (decided 2026-11-02; **not
+  built yet**, planned for the beta after `beta.8`). The aim: a rotated
+  URL is checked at once rather than at the next report with findings.
+  - Built so far: each Slack target's Secret `resourceVersion` is part of
+    the welcome hash, as the mail Secret's is. As ADR 0015 works, that only
+    retries a *failed* welcome once the Secret is fixed. After a welcome
+    has succeeded nothing sends another, so a rotated URL gets none (seen
+    on kind, 2026-11-02).
+  - Planned: record each target's Secret version when its welcome is sent,
+    and send a welcome to just the targets whose version has changed (or
+    that were added later). This amends ADR 0015's once-only rule for
+    Slack targets.
+  - A `CertReport` with only Email notifiers hashes exactly as before, so
+    upgrading re-sends no welcome.
+
 ## Still open
 
-- **The exact CRD shape and field names.** Sketch, not decided:
-  `notifiers[].slack.targets[]` with `name` and `urlSecretRef: {name}`, the
-  Secret key fixed as `url`.
 - **Who may use which Secret.** Nothing restricts which Secrets a
   `CertReport` may reference. Isolating teams from each other's channels
   would be its own decision.
-- **The welcome message and Secret changes.** Whether a changed webhook
-  Secret triggers a new welcome (the welcome hash includes the mail
-  Secret's `resourceVersion` today).
 - **A generic `type: Webhook`**, its JSON schema (question 6), its
   authentication, and Teams. Also whether ADR 0007's "v1 ships both Email
   and Webhook" now means Slack only.

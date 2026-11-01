@@ -26,7 +26,7 @@ works is described in [`../internals/`](../README.md#internals).
 | 14 | Email delivery: SES/SMTP settings set once per install (Helm values → ConfigMap); credentials in hand-made Secrets in the cyclops namespace, injected as env vars; SES ambient-first; strict STARTTLS; `CredentialsFound` condition (supersedes per-notifier provider in 8) | [0014-notifier-credentials.md](0014-notifier-credentials.md) |
 | 15 | Scheduled runs email only when something needs attention; each `CertReport` gets a one-time welcome email (explanation only, with its own built-in template, overridable by the `welcome.html` key of the template ConfigMap; findings come in the scheduled run's own email), sent by a one-off Job, with state in a small owned ConfigMap | [0015-email-policy.md](0015-email-policy.md) |
 | 16 | Packaging: a hand-written Helm chart at `charts/cyclops`, the supported install path, published as an OCI artifact to GHCR with its version taken from the release tag. Whether `config/` stays a second install path is open | [0016-packaging.md](0016-packaging.md) |
-| 17 | Slack notifier (partly decided; a generic webhook and Teams are open): `type: Slack` with Slack's native format; one Secret per webhook in the cyclops namespace, injected as an env var named from the target's `name`; posts like email (findings only, plus a welcome); retries inside the process; long reports split into several messages | [0017-webhook-notifier.md](0017-webhook-notifier.md) |
+| 17 | Slack notifier (partly decided; a generic webhook and Teams are open): `type: Slack` with Slack's native format; `slack.targets[]` with `name` and `urlSecretRef`; one Secret per webhook in the cyclops namespace, injected as an env var named from the target's `name`, checked by `CredentialsFound`, and part of the welcome hash; posts like email (findings only, plus a welcome); retries inside the process; long reports split into several messages | [0017-webhook-notifier.md](0017-webhook-notifier.md) |
 | 18 | `CertReport` schema: defaulted UTC schedule with loose CRD check plus `ScheduleValid`; exposed `CronJob` settings; DNS-1123 `namespaces`; atomic `notifiers` list with type/CEL union and `minItems: 1`; required template `key` plus `TemplateValid`; printer columns Schedule/Suspended/Age. `status` beyond conditions is deferred to observability | [0018-certreport-schema.md](0018-certreport-schema.md) |
 | 19 | Failed report runs: a `ReportSucceeding` condition read from the owned CronJob's status (no Job watch) | [0019-failed-run-visibility.md](0019-failed-run-visibility.md) |
 | 20 | Ingress annotation mode: opt-in per CR (`spec.ingressAnnotationMode`, exclusive with `namespaces`); Ingresses join a CR with one annotation and map to Certificates by `secretName`; no cross-tenant guard in v1 (revises 10's RBAC) | [0020-ingress-annotation-mode.md](0020-ingress-annotation-mode.md) |
@@ -41,8 +41,7 @@ works is described in [`../internals/`](../README.md#internals).
 - Webhook notifier specifics (ADR 0007): the Slack notifier is decided in
   [0017-webhook-notifier.md](0017-webhook-notifier.md) (`type: Slack`, one
   Secret per webhook, env var named from the target's `name`, retries in the
-  process, long reports split). Still open there:
-  - the exact CRD field names;
+  process, long reports split, the CRD shape). Still open there:
   - who may use which Secret;
   - a generic `type: Webhook`, its JSON schema, auth, and Teams;
   - email's Job retry settings following the retry decision.
@@ -83,8 +82,9 @@ GHCR); no dedup, [ADR 0022](0022-no-dedup.md); the Slack notifier, [ADR 0017](00
 - `helm install` prints a commented `CertReport` example and the `kubectl explain` commands.
 
 **Next.**
-- The Slack notifier ([ADR 0017](0017-webhook-notifier.md)). Only the `webhooks.Sender`
-  interface exists. The CRD fields, the sender, the env var wiring and report mode are not built.
+- The Slack notifier ([ADR 0017](0017-webhook-notifier.md)) is built (CRD, sender, env var
+  wiring, report mode) and tested with envtest and a local fake Slack. Not yet run on a
+  cluster or against real Slack.
 - Check the mail score of the email (HTML only, no `text/plain` part; adding one touches ADR
   0005 and 0013 and is not decided).
 - Still manual-only: `test.yml` and `lint.yml`. Tidy the old `beta.3` and `beta.4` tags.

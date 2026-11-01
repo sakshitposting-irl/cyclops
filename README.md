@@ -7,7 +7,7 @@ becomes an outage.
 
 cyclops is a Kubernetes controller that watches cert-manager `Certificate` resources. "Overdue"
 means past the renewal time cert-manager set for the certificate. Reports go out by email (SES or
-SMTP); a Slack webhook notifier is planned.
+SMTP) or to Slack (built on `main`, not in a release yet).
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
 one-time welcome message per report configuration explains this and proves delivery works. It ships
@@ -18,8 +18,8 @@ in the published beta (use `v0.1.0-beta.7` or newer).
 > Install it with Helm from the published chart. The full path has run on a local kind cluster with
 > a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
-> up on the `CertReport`. Not built yet: the Slack webhook notifier (decided, in
-> [ADR 0017](docs/decisions/0017-webhook-notifier.md)). SMTP with a login has also run against
+> up on the `CertReport`. The Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md))
+> is built on `main` but not released, and has not run on a cluster or against real Slack. SMTP with a login has also run against
 > Gmail, with STARTTLS on port 587 and TLS on port 465; SES has not been run against real AWS (only against a fake client). See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
@@ -32,7 +32,7 @@ flowchart LR
     CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
     JOB -->|lists| CM["cert-manager<br/>Certificates"]
     JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
-    JOB -.->|planned| HOOK[Webhook]
+    JOB -->|posts| HOOK["Slack<br/>(incoming webhooks)"]
 ```
 
 1. You create a cluster-scoped `CertReport` describing the schedule, what to cover (namespaces, or
@@ -40,7 +40,7 @@ flowchart LR
 2. The controller keeps a Kubernetes `CronJob` in sync with it.
 3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
    `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
-   to each notifier (only `Email` exists today). If there are none, it sends nothing.
+   to each notifier (`Email` or `Slack`). If there are none, it sends nothing.
 4. When a `CertReport` is first created, cyclops sends a one-time welcome message that explains
    when cyclops emails you, with no findings in it. This also checks that delivery works.
 
@@ -64,7 +64,7 @@ nothing, and Pods, which do the work.
 | `CronJob` | API object | Holds the schedule and the report Pod template. Created and kept in sync by the controller, and owned by its `CertReport`. |
 | `Job` | API object | One per run, created from the CronJob by Kubernetes. Also used for the one-off welcome message. |
 | State `ConfigMap` | API object | `cyclops-state-<name>`: records whether the welcome message was sent. Owned by the `CertReport`. |
-| Controller | Pod (Deployment, always on) | Reconciles `CertReport`s into CronJobs, sets status conditions, and starts the welcome Job. Never reads certificates and never sends mail. |
+| Controller | Pod (Deployment, always on) | Reconciles `CertReport`s into CronJobs, sets status conditions, and starts the welcome Job. Never reads certificates and never sends a report. |
 | Report Pod | Pod (one-shot, per run) | The same binary in report mode. Lists certificates, decides what to report, renders and sends the message, then exits. |
 
 One controller Pod serves any number of `CertReport`s. Each `CertReport` gets its own CronJob and
@@ -113,7 +113,9 @@ by hand in [`config/rbac/report_*.yaml`](config/rbac), since the markers only de
 Mail delivery is not governed by Kubernetes RBAC. The report Pod receives its SMTP credentials as
 environment variables from the install-level Secret, or uses an ambient AWS identity for SES (for
 example IRSA on the `cyclops-report` ServiceAccount). The controller never reads the mail password
-([ADR 0014](docs/decisions/0014-notifier-credentials.md)).
+([ADR 0014](docs/decisions/0014-notifier-credentials.md)). Slack webhook URLs reach the report Pod
+the same way, one environment variable per target; the controller only checks that each Secret has
+a `url` key ([ADR 0017](docs/decisions/0017-webhook-notifier.md)).
 
 ## Status
 
@@ -131,7 +133,7 @@ example IRSA on the `cyclops-report` ServiceAccount). The controller never reads
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
-| Slack notifier | Not built. Decided in [ADR 0017](docs/decisions/0017-webhook-notifier.md): `type: Slack`, one Secret per webhook, Slack's native format. Only the `webhooks.Sender` interface exists. A generic webhook and Teams are not decided |
+| Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) | Built on `main`, not released. `type: Slack` with `slack.targets[]` (`name`, `urlSecretRef`), one Secret per webhook (key `url`), checked by `CredentialsFound`. Unit- and envtest-tested, and run against a local fake Slack (retries, splitting, the 1s gap between parts). Not run on a cluster or against real Slack, so Slack's message limits are untested. A generic webhook and Teams are not decided |
 | Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
 | Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
@@ -188,7 +190,7 @@ make manifests generate
 ## Install the beta
 
 > [!WARNING]
-> `v0.1.0-beta.7` is a beta. It has no webhook (see [Status](#status)). Use `beta.6` or newer: `beta.5`
+> `v0.1.0-beta.7` is a beta. It has no Slack notifier; that is on `main`, not released (see [Status](#status)). Use `beta.6` or newer: `beta.5`
 > crash-loops on startup.
 > Real SMTP authentication and STARTTLS have run against Gmail; SES has not been run against real AWS (only against a fake client). Try it on a non-production cluster first,
 > or on kind with [the section below](#try-it-on-kind).
@@ -226,6 +228,11 @@ unauthenticated relay use `--set email.smtp.tls=None` and no credentials Secret 
 `None` together with one). For SES, set `email.provider=SES` and `email.ses.region`, and give the
 report ServiceAccount an AWS identity, for example an IRSA annotation through
 `reportServiceAccount.annotations`, or name a Secret in `email.ses.credentialsSecretName`.
+
+From the next release (on `main`, not in `beta.7`), email is optional: with neither
+`email.smtp.host` nor `email.ses.region` set, the chart installs no mail settings, for an install
+that only posts to webhooks, such as [Slack](#slack). A `CertReport` with an Email notifier then fails its runs with
+a message saying email is not configured.
 
 This creates the `CertReport` CRD, both ServiceAccounts with their RBAC, the mail ConfigMap and the
 controller Deployment. Every value, and how to customise the email template, is in the
@@ -348,6 +355,54 @@ An annotation that names a CertReport that does not exist, or has a typo in the 
 silently: the Ingress is just never reported and nothing is logged; checking the annotation is up to the
 Ingress owner. Anyone who can edit an Ingress can send that Ingress's certificate details to a
 CertReport's recipients, so restrict who can edit Ingresses.
+
+### Slack
+
+> [!NOTE]
+> Built on `main`, not in a release yet: `v0.1.0-beta.7` rejects `type: Slack`. It has been tested
+> with envtest and a local fake Slack, not yet on a cluster or against real Slack.
+
+A Slack notifier posts the report to one or more
+[incoming webhooks](https://api.slack.com/messaging/webhooks). A webhook URL is itself a credential
+(anyone with it can post), so it never goes in the `CertReport`: each target names a Secret in
+`cyclops-system` that holds the URL under the key `url`.
+
+```sh
+kubectl -n cyclops-system create secret generic slack-oncall \
+  --from-literal=url=https://hooks.slack.com/services/T000/B000/XXXX
+```
+
+```yaml
+notifiers:
+  - type: Slack
+    slack:
+      targets:
+        - name: oncall                        # lowercase letters, digits and "-"; unique per CertReport
+          urlSecretRef: {name: slack-oncall}
+        - name: platform-certs
+          urlSecretRef: {name: slack-platform}
+  - type: Email                               # Slack and Email can be combined
+    email: {from: cyclops@example.com, to: [platform@example.com]}
+```
+
+- **When it posts:** as for email, only when something needs attention, plus a one-time welcome
+  that also checks the URL works. If that welcome fails, fixing the Secret retries it. A URL
+  rotated after a successful welcome gets no new welcome yet (planned for the next beta), so it is
+  first used at the next report with findings.
+- **Checking the Secrets:** `CredentialsFound` turns `False`, naming the target, if a Secret is
+  missing or has no `url` key. A webhook-only `CertReport` does not need the mail settings.
+- **Long reports** are split into messages of up to 48 certificates each ("part 1 of 3"), about a
+  second apart, to stay under Slack's rate limit of one message per second per webhook.
+- **Failures:** each post is retried up to 3 times on a network error, a 5xx or a 429 (honouring
+  `Retry-After`), with backoff. Other 4xx errors (a revoked webhook, say) are not retried. Each
+  target succeeds or fails on its own; if any fails the run fails, naming the target, so
+  `ReportSucceeding` turns `False`. The webhook URL never appears in an error or a log line.
+- **How the URL reaches the Pod:** as the environment variable `CYCLOPS_SLACK_<NAME>` (`oncall` is
+  `CYCLOPS_SLACK_ONCALL`, `platform-certs` is `CYCLOPS_SLACK_PLATFORM_CERTS`).
+
+Anyone who can create a `CertReport` can name any Secret in `cyclops-system` as a target, so teams
+are not isolated from each other's channels. That is still open in
+[ADR 0017](docs/decisions/0017-webhook-notifier.md).
 
 ## Try it on kind
 
