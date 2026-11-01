@@ -1,10 +1,16 @@
 cyclops {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
 
+{{ if include "cyclops.emailEnabled" . -}}
 Mail delivery: {{ .Values.email.provider }}
 {{- with include "cyclops.credentialsSecret" . }}
 Credentials Secret: {{ . }} (create it in {{ $.Release.Namespace }} if it does not exist yet)
 {{- else }}
 No credentials Secret configured.
+{{- end }}
+{{- else -}}
+Mail delivery: not configured. A CertReport with an Email notifier will fail its runs; set
+email.smtp.host (or email.provider=SES and email.ses.region) to enable it. Webhooks (Slack) need no install
+settings.
 {{- end }}
 
 Nothing is reported until you create a CertReport. Save this as certreport.yaml, edit the

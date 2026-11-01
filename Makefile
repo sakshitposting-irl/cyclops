@@ -59,6 +59,7 @@ helm-crd: manifests ## Copy the generated CRD into the Helm chart template.
 helm-lint: helm-crd ## Lint and render the Helm chart (needs helm).
 	helm lint charts/cyclops --set email.smtp.host=smtp.example.com
 	helm template cyclops charts/cyclops --set email.smtp.host=smtp.example.com >/dev/null
+	helm lint charts/cyclops # no email settings: a webhook-only install
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

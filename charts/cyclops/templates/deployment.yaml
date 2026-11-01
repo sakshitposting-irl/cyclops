@@ -50,7 +50,8 @@ spec:
             # The report Pods run this same image.
             - --report-image={{ include "cyclops.image" . }}
             - --report-service-account={{ include "cyclops.reportServiceAccount" . }}
-            - --mail-config={{ include "cyclops.mailConfigMap" . }}
+            {{- /* Empty when email is not configured, so report Pods do not wait on a missing ConfigMap. */}}
+            - --mail-config={{ if include "cyclops.emailEnabled" . }}{{ include "cyclops.mailConfigMap" . }}{{ end }}
             {{- if .Values.emailTemplate.useAsDefault }}
             - --default-template-configmap={{ include "cyclops.emailTemplateConfigMap" . }}
             {{- end }}

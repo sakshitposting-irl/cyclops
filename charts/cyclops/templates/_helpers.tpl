@@ -34,9 +34,19 @@ control-plane: controller-manager
 {{- define "cyclops.reportServiceAccount" -}}{{ include "cyclops.fullname" . }}-report{{- end }}
 {{- define "cyclops.mailConfigMap" -}}{{ include "cyclops.fullname" . }}-mail-config{{- end }}
 
-{{/* The one credentials Secret in use: the chosen provider's. Empty means none. */}}
+{{/* "true" when email is configured: the chosen provider has its host or region set. A webhook-only
+install leaves both empty and gets no mail settings at all. */}}
+{{- define "cyclops.emailEnabled" -}}
+{{- if eq .Values.email.provider "SES" -}}{{ if .Values.email.ses.region }}true{{ end -}}
+{{- else -}}{{ if .Values.email.smtp.host }}true{{ end -}}
+{{- end -}}
+{{- end }}
+
+{{/* The one credentials Secret in use: the chosen provider's. Empty means none, and always none
+when email is not configured. */}}
 {{- define "cyclops.credentialsSecret" -}}
-{{- if eq .Values.email.provider "SES" -}}
+{{- if not (include "cyclops.emailEnabled" .) -}}
+{{- else if eq .Values.email.provider "SES" -}}
 {{- .Values.email.ses.credentialsSecretName -}}
 {{- else -}}
 {{- .Values.email.smtp.credentialsSecretName -}}

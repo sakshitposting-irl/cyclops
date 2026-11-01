@@ -17,12 +17,12 @@ email:
   # Do not put credentials in this file. Create the Secret yourself in the
   # release namespace and reference it by name.
   smtp:
-    host: "" # required when provider is SMTP
+    host: "" # empty = email is not configured (a webhook-only install)
     port: null # optional; defaults from tls (StartTLS 587, TLS 465, None 25)
     tls: StartTLS # StartTLS | TLS | None
     credentialsSecretName: "" # keys: username, password. Empty = no AUTH
   ses:
-    region: "" # required when provider is SES
+    region: "" # empty = email is not configured (a webhook-only install)
     credentialsSecretName: "" # keys: access-key-id, secret-access-key. Empty = IRSA / Pod Identity
 
 # Email template (ADR 0005). The chart ships the built-in default as files/default.html.tmpl and

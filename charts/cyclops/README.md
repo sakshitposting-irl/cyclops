@@ -16,6 +16,10 @@ Secret yourself in the release namespace and reference it by name (`email.smtp.c
 with keys `username`/`password`, or `email.ses.credentialsSecretName` with keys
 `access-key-id`/`secret-access-key`; for SES, leave it empty to use IRSA or Pod Identity).
 
+Email is optional. Leave `email.smtp.host` (or, for SES, `email.ses.region`) empty and the chart
+installs no mail settings: an install that only posts to webhooks (Slack) needs none. A `CertReport` with an
+Email notifier then fails its runs, saying email is not configured.
+
 ## Create a CertReport
 
 The chart installs the `CertReport` CRD but no `CertReport`: that is where you say when to look, which

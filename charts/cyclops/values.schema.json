@@ -41,23 +41,7 @@
             "credentialsSecretName": { "type": "string" }
           }
         }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "provider": { "const": "SMTP" } } },
-          "then": {
-            "required": ["smtp"],
-            "properties": { "smtp": { "required": ["host"], "properties": { "host": { "minLength": 1 } } } }
-          }
-        },
-        {
-          "if": { "properties": { "provider": { "const": "SES" } } },
-          "then": {
-            "required": ["ses"],
-            "properties": { "ses": { "required": ["region"], "properties": { "region": { "minLength": 1 } } } }
-          }
-        }
-      ]
+      }
     },
     "emailTemplate": {
       "type": "object",

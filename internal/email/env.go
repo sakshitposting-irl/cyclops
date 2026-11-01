@@ -70,6 +70,10 @@ func FromEnv(ctx context.Context, getenv func(string) string) (Sender, error) {
 		return NewSMTP(cfg)
 	case ProviderSES:
 		return NewSES(ctx, SESConfig{Region: getenv(EnvSESRegion)})
+	case "":
+		// A webhook-only install has no mail settings, so only an Email notifier gets here.
+		return nil, fmt.Errorf("%s is not set: this install has no email settings (Helm values email.smtp.host, "+
+			"or email.provider=SES and email.ses.region)", EnvProvider)
 	default:
 		return nil, fmt.Errorf("%s: must be %s or %s, got %q", EnvProvider, ProviderSES, ProviderSMTP, getenv(EnvProvider))
 	}
