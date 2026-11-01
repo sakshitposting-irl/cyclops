@@ -60,6 +60,17 @@ func validCertReport() *cyclopsv1alpha1.CertReport {
 	}
 }
 
+// slackNotifier is a Slack notifier with one target per name, each with the Secret slack-<name>.
+func slackNotifier(names ...string) cyclopsv1alpha1.Notifier {
+	n := cyclopsv1alpha1.Notifier{Type: cyclopsv1alpha1.NotifierTypeSlack, Slack: &cyclopsv1alpha1.SlackNotifier{}}
+	for _, name := range names {
+		n.Slack.Targets = append(n.Slack.Targets, cyclopsv1alpha1.SlackTarget{
+			Name: name, URLSecretRef: cyclopsv1alpha1.SecretRef{Name: "slack-" + name},
+		})
+	}
+	return n
+}
+
 // namesN returns n distinct, valid namespace names.
 func namesN(n int) []string {
 	out := make([]string, n)
@@ -115,6 +126,17 @@ var _ = Describe("CertReport CRD validation", func() {
 			Entry("several Email notifiers", func(cr *cyclopsv1alpha1.CertReport) {
 				cr.Spec.Notifiers = append(cr.Spec.Notifiers, cr.Spec.Notifiers[0])
 			}),
+			Entry("a Slack notifier next to the Email one", func(cr *cyclopsv1alpha1.CertReport) {
+				cr.Spec.Notifiers = append(cr.Spec.Notifiers, slackNotifier("oncall", "platform-certs"))
+			}),
+			Entry("two Slack notifiers with different target names", func(cr *cyclopsv1alpha1.CertReport) {
+				cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier("oncall"), slackNotifier("team-2")}
+			}),
+			Entry("a 63-character target name and a dotted Secret name", func(cr *cyclopsv1alpha1.CertReport) {
+				n := slackNotifier(strings.Repeat("a", 63))
+				n.Slack.Targets[0].URLSecretRef.Name = "slack.oncall"
+				cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{n}
+			}),
 			// Address content is checked by parse() when the report runs (ADR 0018 Q5), not by the CRD.
 			Entry("an empty recipient list (parse rejects it at run time)", func(cr *cyclopsv1alpha1.CertReport) {
 				cr.Spec.Notifiers[0].Email.To = []string{}
@@ -145,7 +167,54 @@ var _ = Describe("CertReport CRD validation", func() {
 			Entry("type Email without an email block (the CEL rule)",
 				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Email = nil }, "spec.notifiers[0]"),
 			Entry("an unknown notifier type",
-				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Type = "Slack" }, "spec.notifiers[0].type"),
+				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Type = "Teams" }, "spec.notifiers[0].type"),
+			Entry("type Slack with an email block instead of a slack block (the CEL rule)",
+				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Type = cyclopsv1alpha1.NotifierTypeSlack }, "spec.notifiers[0]"),
+			Entry("type Email with both blocks (the CEL rule)",
+				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Slack = slackNotifier("oncall").Slack }, "spec.notifiers[0]"),
+			Entry("11 notifiers",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					for range 10 {
+						cr.Spec.Notifiers = append(cr.Spec.Notifiers, cr.Spec.Notifiers[0])
+					}
+				}, "spec.notifiers"),
+			Entry("a Slack notifier with no targets",
+				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier()} },
+				"spec.notifiers[0].slack.targets"),
+			Entry("a target name with an underscore",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier("on_call")}
+				},
+				"spec.notifiers[0].slack.targets[0].name"),
+			Entry("an uppercase target name",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier("OnCall")}
+				},
+				"spec.notifiers[0].slack.targets[0].name"),
+			Entry("a 64-character target name",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier(strings.Repeat("a", 64))}
+				}, "spec.notifiers[0].slack.targets[0].name"),
+			Entry("a duplicate target name in one notifier (listType=map)",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier("oncall", "oncall")}
+				}, "spec.notifiers[0].slack.targets[1]"),
+			Entry("a duplicate target name across notifiers (the CEL rule)",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{slackNotifier("oncall"), slackNotifier("team-2", "oncall")}
+				}, "Slack target names must be unique"),
+			Entry("an empty Secret name",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					n := slackNotifier("oncall")
+					n.Slack.Targets[0].URLSecretRef.Name = ""
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{n}
+				}, "spec.notifiers[0].slack.targets[0].urlSecretRef.name"),
+			Entry("an invalid Secret name",
+				func(cr *cyclopsv1alpha1.CertReport) {
+					n := slackNotifier("oncall")
+					n.Slack.Targets[0].URLSecretRef.Name = "Slack_Oncall"
+					cr.Spec.Notifiers = []cyclopsv1alpha1.Notifier{n}
+				}, "spec.notifiers[0].slack.targets[0].urlSecretRef.name"),
 			Entry("an empty from",
 				func(cr *cyclopsv1alpha1.CertReport) { cr.Spec.Notifiers[0].Email.From = "" }, "spec.notifiers[0].email.from"),
 			Entry("an omitted to",

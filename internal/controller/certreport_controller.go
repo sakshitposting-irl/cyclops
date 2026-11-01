@@ -50,6 +50,7 @@ import (
 	cyclopsv1alpha1 "github.com/sakshitposting-irl/cyclops/api/v1alpha1"
 	"github.com/sakshitposting-irl/cyclops/internal/email"
 	"github.com/sakshitposting-irl/cyclops/internal/render"
+	"github.com/sakshitposting-irl/cyclops/internal/webhooks"
 )
 
 // CertReportReconciler turns a CertReport into the Kubernetes objects that run it.
@@ -101,7 +102,8 @@ type CertReportReconciler struct {
 // The CronJob lives in the cyclops namespace, so the manager gets a namespaced Role for it.
 // +kubebuilder:rbac:groups=batch,namespace=system,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 
-// The credentials Secret is only read to check it exists and has the expected keys (ADR 0014).
+// The credentials and Slack URL Secrets are only read to check they exist and have the expected keys
+// (ADR 0014, ADR 0017).
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch
 
 // A template ConfigMap is only read to check it has the key and parses (ADR 0018, question 7).
@@ -124,13 +126,13 @@ type CertReportReconciler struct {
 // +kubebuilder:rbac:groups="",namespace=system,resources=configmaps,verbs=create;update
 
 // Reconcile brings the cluster in line with one CertReport. It runs whenever the CertReport,
-// its CronJob, the credentials Secret or its template ConfigMap changes, and is safe to run repeatedly: when nothing
+// its CronJob, one of its Secrets or its template ConfigMap changes, and is safe to run repeatedly: when nothing
 // has changed it performs no writes.
 //
 // Each pass:
 //  1. Load the CertReport (nothing to do if it is gone or being deleted).
 //  2. Create or update the owned CronJob from the spec, and set ScheduleValid from the result.
-//  3. Check the mail credentials Secret and set CredentialsFound.
+//  3. Check the mail credentials and Slack URL Secrets and set CredentialsFound.
 //  4. Check that the namespaces in the spec exist and set NamespacesFound.
 //  5. Check that the email template loads and parses and set TemplateValid.
 //  6. Write the status conditions once, and only if they changed.
@@ -194,9 +196,9 @@ func (r *CertReportReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, fmt.Errorf("reconciling CronJob %s/%s: %w", cj.Namespace, cj.Name, err)
 	}
 
-	// Step 3: the credentials Secret. The Event is emitted before the status write because it
+	// Step 3: the credentials Secrets. The Event is emitted before the status write because it
 	// compares the new condition with the one currently stored.
-	creds, err := r.credentialsCondition(ctx)
+	creds, err := r.credentialsCondition(ctx, &cr)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -264,9 +266,9 @@ func (r *CertReportReconciler) reconcileWelcome(ctx context.Context, cr *cyclops
 		return cond, nil
 	}
 
-	// The name includes a hash of the CertReport and the credentials Secret's resourceVersion, so
-	// editing either one starts a fresh attempt.
-	secretRV, err := r.credentialsVersion(ctx)
+	// The name includes a hash of the CertReport and its credentials Secrets' resourceVersions, so
+	// editing any of them starts a fresh attempt.
+	secretRV, err := r.credentialsVersion(ctx, cr)
 	if err != nil {
 		return cond, err
 	}
@@ -426,16 +428,69 @@ const (
 	secretKeySESSecretKey = "secret-access-key"
 )
 
-// credentialsCondition reports whether the configured credentials Secret exists and holds a
+// Reasons of the CredentialsFound condition.
+const (
+	credReasonFound          = "Found"
+	credReasonNotConfigured  = "NotConfigured"
+	credReasonSecretNotFound = "SecretNotFound"
+	credReasonKeyMissing     = "SecretKeyMissing"
+)
+
+// credentialsCondition reports whether every Secret cr's notifiers need exists with the expected
+// keys: the mail credentials Secret when cr has an Email notifier, and each Slack target's URL
+// Secret (ADR 0017). The first problem found decides the condition.
+func (r *CertReportReconciler) credentialsCondition(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (metav1.Condition, error) {
+	var cond metav1.Condition
+	if hasEmailNotifier(cr) {
+		var err error
+		if cond, err = r.mailCredentialsCondition(ctx); err != nil || cond.Status != metav1.ConditionTrue {
+			return cond, err
+		}
+	}
+	targets := slackTargets(cr)
+	if len(targets) == 0 {
+		if cond.Type == "" {
+			// Every notifier type needs a Secret today, so this is only reached by a type added later.
+			cond = metav1.Condition{Type: cyclopsv1alpha1.ConditionCredentialsFound, Status: metav1.ConditionTrue,
+				Reason: credReasonNotConfigured, Message: "no notifier of this CertReport needs a Secret"}
+		}
+		return cond, nil
+	}
+
+	for _, t := range targets {
+		var secret corev1.Secret
+		err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: t.URLSecretRef.Name}, &secret)
+		switch {
+		case apierrors.IsNotFound(err):
+			return metav1.Condition{Type: cyclopsv1alpha1.ConditionCredentialsFound, Status: metav1.ConditionFalse,
+				Reason: credReasonSecretNotFound, Message: fmt.Sprintf("Secret %s/%s of Slack target %q does not exist",
+					r.Namespace, t.URLSecretRef.Name, t.Name)}, nil
+		case err != nil:
+			return cond, fmt.Errorf("reading Secret %s/%s of Slack target %q: %w", r.Namespace, t.URLSecretRef.Name, t.Name, err)
+		case len(secret.Data[webhooks.SlackSecretKey]) == 0:
+			return metav1.Condition{Type: cyclopsv1alpha1.ConditionCredentialsFound, Status: metav1.ConditionFalse,
+				Reason: credReasonKeyMissing, Message: fmt.Sprintf("Secret %s/%s of Slack target %q needs the key %q",
+					r.Namespace, t.URLSecretRef.Name, t.Name, webhooks.SlackSecretKey)}, nil
+		}
+	}
+	msg := fmt.Sprintf("the Secrets of all %d Slack targets have a url", len(targets))
+	if cond.Type != "" {
+		msg = cond.Message + "; " + msg
+	}
+	return metav1.Condition{Type: cyclopsv1alpha1.ConditionCredentialsFound, Status: metav1.ConditionTrue,
+		Reason: credReasonFound, Message: msg}, nil
+}
+
+// mailCredentialsCondition reports whether the configured credentials Secret exists and holds a
 // complete key pair (ADR 0014, decision 8). The controller never reads the mail ConfigMap,
 // so it does not know whether SMTP or SES is in use and accepts either pair. With no Secret
 // configured the condition is True: credentials are optional (SMTP without AUTH, SES with
 // ambient credentials such as IRSA).
-func (r *CertReportReconciler) credentialsCondition(ctx context.Context) (metav1.Condition, error) {
+func (r *CertReportReconciler) mailCredentialsCondition(ctx context.Context) (metav1.Condition, error) {
 	cond := metav1.Condition{Type: cyclopsv1alpha1.ConditionCredentialsFound}
 	if r.CredentialsSecret == "" {
 		cond.Status = metav1.ConditionTrue
-		cond.Reason = "NotConfigured"
+		cond.Reason = credReasonNotConfigured
 		cond.Message = "no credentials Secret is configured; delivery uses no static credentials"
 		return cond, nil
 	}
@@ -445,19 +500,19 @@ func (r *CertReportReconciler) credentialsCondition(ctx context.Context) (metav1
 	switch {
 	case apierrors.IsNotFound(err):
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "SecretNotFound"
+		cond.Reason = credReasonSecretNotFound
 		cond.Message = fmt.Sprintf("Secret %s/%s does not exist", r.Namespace, r.CredentialsSecret)
 	case err != nil:
 		return cond, fmt.Errorf("reading credentials Secret %s/%s: %w", r.Namespace, r.CredentialsSecret, err)
 	case !hasCredentialPair(&secret):
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "SecretKeyMissing"
+		cond.Reason = credReasonKeyMissing
 		cond.Message = fmt.Sprintf("Secret %s/%s needs the keys %q and %q (SMTP) or %q and %q (SES)",
 			r.Namespace, r.CredentialsSecret, secretKeySMTPUsername, secretKeySMTPPassword,
 			secretKeySESAccessKey, secretKeySESSecretKey)
 	default:
 		cond.Status = metav1.ConditionTrue
-		cond.Reason = "Found"
+		cond.Reason = credReasonFound
 		cond.Message = fmt.Sprintf("Secret %s/%s has a complete credentials pair", r.Namespace, r.CredentialsSecret)
 	}
 	return cond, nil
@@ -689,7 +744,8 @@ func cronJobName(crName string) string {
 }
 
 // welcomeHash identifies one welcome attempt (ADR 0015). It changes when the CertReport is
-// edited or the credentials Secret changes, which is what allows a retry after a fix. It includes
+// edited or one of its credentials Secrets changes, which is what allows a retry after a fix, and
+// for Slack checks a rotated URL (ADR 0017). It includes
 // the full CertReport name, so two reports whose names share a long start still get different
 // Job names (welcomeJobName cuts the name). The fields are joined with "/" so that, for example,
 // generation 1 with version "2" and generation 12 with no version do not hash the same.
@@ -698,22 +754,64 @@ func welcomeHash(cr *cyclopsv1alpha1.CertReport, secretResourceVersion string) s
 	return hex.EncodeToString(sum[:])[:8]
 }
 
-// credentialsVersion is the resourceVersion of the credentials Secret, which changes whenever
-// its data does. It is "" when no Secret is configured (SMTP without a login, SES with ambient
-// credentials) or the Secret does not exist yet, so the hash then depends on the CertReport alone.
-func (r *CertReportReconciler) credentialsVersion(ctx context.Context) (string, error) {
-	if r.CredentialsSecret == "" {
+// credentialsVersion combines the resourceVersions of the Secrets cr's notifiers use, each of
+// which changes whenever its data does. The mail credentials Secret counts only when cr has an
+// Email notifier, and contributes "" when none is configured (SMTP without a login, SES with
+// ambient credentials) or it does not exist yet. Each Slack target adds "|name=version", in spec
+// order. An Email-only CertReport so gets the same value, and the same welcome hash, as before
+// Slack existed.
+func (r *CertReportReconciler) credentialsVersion(ctx context.Context, cr *cyclopsv1alpha1.CertReport) (string, error) {
+	var v strings.Builder
+	if hasEmailNotifier(cr) {
+		rv, err := r.secretVersion(ctx, r.CredentialsSecret)
+		if err != nil {
+			return "", err
+		}
+		v.WriteString(rv)
+	}
+	for _, t := range slackTargets(cr) {
+		rv, err := r.secretVersion(ctx, t.URLSecretRef.Name)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&v, "|%s=%s", t.Name, rv)
+	}
+	return v.String(), nil
+}
+
+// secretVersion is the resourceVersion of the Secret name in the cyclops namespace, or "" when
+// name is empty or the Secret does not exist.
+func (r *CertReportReconciler) secretVersion(ctx context.Context, name string) (string, error) {
+	if name == "" {
 		return "", nil
 	}
 	var secret corev1.Secret
-	err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: r.CredentialsSecret}, &secret)
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, &secret)
 	switch {
 	case apierrors.IsNotFound(err):
 		return "", nil
 	case err != nil:
-		return "", fmt.Errorf("reading credentials Secret %s/%s: %w", r.Namespace, r.CredentialsSecret, err)
+		return "", fmt.Errorf("reading Secret %s/%s: %w", r.Namespace, name, err)
 	}
 	return secret.ResourceVersion, nil
+}
+
+// hasEmailNotifier is true when cr sends by email, so it depends on the mail credentials Secret.
+func hasEmailNotifier(cr *cyclopsv1alpha1.CertReport) bool {
+	return slices.ContainsFunc(cr.Spec.Notifiers, func(n cyclopsv1alpha1.Notifier) bool {
+		return n.Type == cyclopsv1alpha1.NotifierTypeEmail
+	})
+}
+
+// slackTargets lists the targets of all cr's Slack notifiers, in spec order.
+func slackTargets(cr *cyclopsv1alpha1.CertReport) []cyclopsv1alpha1.SlackTarget {
+	var out []cyclopsv1alpha1.SlackTarget
+	for _, n := range cr.Spec.Notifiers {
+		if n.Slack != nil {
+			out = append(out, n.Slack.Targets...)
+		}
+	}
+	return out
 }
 
 // maxJobNameLen is the longest Job name that is safe to use: the Job controller copies the name
@@ -740,7 +838,7 @@ func welcomeJobName(crName, hash string) string {
 // API server's defaults) alone, so an unchanged CertReport produces no update. It copies the
 // schedule and run settings from the spec, and builds the report Pod: the same image as the
 // controller, started in report mode, running as the read-only report ServiceAccount, with
-// the mail settings injected as environment variables.
+// the mail settings and Slack URLs injected as environment variables.
 func (r *CertReportReconciler) mutateCronJob(cj *batchv1.CronJob, cr *cyclopsv1alpha1.CertReport) error {
 	if cj.Labels == nil {
 		cj.Labels = map[string]string{}
@@ -774,7 +872,7 @@ func (r *CertReportReconciler) mutateCronJob(cj *batchv1.CronJob, cr *cyclopsv1a
 		c.Args = append(c.Args, "--default-template-configmap="+r.DefaultTemplateConfigMap)
 	}
 	c.EnvFrom = r.mailEnvFrom()
-	c.Env = r.mailEnv()
+	c.Env = append(r.mailEnv(), slackEnv(cr)...)
 
 	return controllerutil.SetControllerReference(cr, cj, r.Scheme)
 }
@@ -812,20 +910,50 @@ func (r *CertReportReconciler) mailEnv() []corev1.EnvVar {
 	}
 }
 
-// certReportsForSecret maps a change of the credentials Secret to every CertReport, since
-// they all share it (ADR 0014). Other Secrets are ignored.
-func (r *CertReportReconciler) certReportsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
-	if r.CredentialsSecret == "" || obj.GetNamespace() != r.Namespace || obj.GetName() != r.CredentialsSecret {
+// slackEnv wires each Slack target's URL Secret into the report Pod, under the variable named by
+// webhooks.SlackEnvName (ADR 0017). The references are optional: with a required one, a missing
+// Secret would hold the Pod in CreateContainerConfigError, and with concurrencyPolicy Forbid that
+// stuck run would block every later one. Optional, the run starts and fails naming the target.
+func slackEnv(cr *cyclopsv1alpha1.CertReport) []corev1.EnvVar {
+	targets := slackTargets(cr)
+	if len(targets) == 0 {
 		return nil
 	}
+	env := make([]corev1.EnvVar, 0, len(targets))
+	for _, t := range targets {
+		optional := true
+		env = append(env, corev1.EnvVar{Name: webhooks.SlackEnvName(t.Name), ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: t.URLSecretRef.Name},
+				Key:                  webhooks.SlackSecretKey,
+				Optional:             &optional,
+			},
+		}})
+	}
+	return env
+}
+
+// certReportsForSecret maps a change of a Secret in the cyclops namespace to the CertReports that
+// use it: every CertReport for the shared mail credentials Secret (ADR 0014), and those with a
+// Slack target naming it (ADR 0017). Other Secrets are ignored.
+func (r *CertReportReconciler) certReportsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.Namespace {
+		return nil
+	}
+	mail := r.CredentialsSecret != "" && obj.GetName() == r.CredentialsSecret
 	var list cyclopsv1alpha1.CertReportList
 	if err := r.List(ctx, &list); err != nil {
-		logf.FromContext(ctx).Error(err, "listing CertReports for a credentials Secret change")
+		logf.FromContext(ctx).Error(err, "listing CertReports for a Secret change")
 		return nil
 	}
-	reqs := make([]reconcile.Request, 0, len(list.Items))
+	var reqs []reconcile.Request
 	for i := range list.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		uses := mail || slices.ContainsFunc(slackTargets(&list.Items[i]), func(t cyclopsv1alpha1.SlackTarget) bool {
+			return t.URLSecretRef.Name == obj.GetName()
+		})
+		if uses {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
 	}
 	return reqs
 }
@@ -882,7 +1010,7 @@ func (r *CertReportReconciler) welcomeSentAt(ctx context.Context, cr *cyclopsv1a
 //   - a CertReport changing (For);
 //   - a CronJob it owns changing or being deleted by hand (Owns), so it is put back;
 //   - a welcome Job it owns finishing (Owns), so WelcomeSent follows it;
-//   - the credentials Secret changing (Watches), so CredentialsFound follows it;
+//   - the credentials Secret or a Slack URL Secret changing (Watches), so CredentialsFound follows it;
 //   - a template ConfigMap changing (Watches), so TemplateValid follows it;
 //   - a Namespace being created or deleted (Watches), so NamespacesFound follows it.
 func (r *CertReportReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -35,8 +35,8 @@ const (
 	// ConditionNamespacesFound is False when a name in spec.namespaces does not
 	// exist (ADR 0011).
 	ConditionNamespacesFound = "NamespacesFound"
-	// ConditionCredentialsFound is False when the mail credentials Secret is
-	// missing (ADR 0014).
+	// ConditionCredentialsFound is False when the mail credentials Secret
+	// (ADR 0014) or a Slack target's URL Secret (ADR 0017) is missing.
 	ConditionCredentialsFound = "CredentialsFound"
 	// ConditionTemplateValid is False when the referenced template ConfigMap or
 	// key is missing, or the template fails to parse (ADR 0005).
@@ -50,12 +50,14 @@ const (
 )
 
 // NotifierType selects which delivery channel a notifier entry uses (ADR 0007).
-// +kubebuilder:validation:Enum=Email
+// +kubebuilder:validation:Enum=Email;Slack
 type NotifierType string
 
 const (
 	// NotifierTypeEmail sends the report by email (SES or SMTP, ADR 0008).
 	NotifierTypeEmail NotifierType = "Email"
+	// NotifierTypeSlack posts the report to Slack incoming webhooks (ADR 0017).
+	NotifierTypeSlack NotifierType = "Slack"
 )
 
 // AnnotationCRName is set on an Ingress to put the Certificates behind it in
@@ -65,6 +67,7 @@ const AnnotationCRName = "cyclops.sakshitposting-irl.github.io/cr-name"
 
 // CertReportSpec defines the desired state of CertReport (ADR 0018).
 // +kubebuilder:validation:XValidation:rule="!(has(self.ingressAnnotationMode) && self.ingressAnnotationMode && has(self.namespaces) && size(self.namespaces) > 0)",message="namespaces and ingressAnnotationMode are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="self.notifiers.all(a, !has(a.slack) || a.slack.targets.all(t, self.notifiers.filter(b, has(b.slack) && b.slack.targets.exists(u, u.name == t.name)).size() == 1))",message="Slack target names must be unique across all the notifiers of a CertReport"
 type CertReportSpec struct {
 	// schedule is a cron expression (UTC) for when the report runs. It is copied
 	// to the owned CronJob. The CRD only does a loose shape check; the API server
@@ -131,6 +134,7 @@ type CertReportSpec struct {
 	// notifiers lists where the report is delivered.
 	// +listType=atomic
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
 	// +required
 	Notifiers []Notifier `json:"notifiers"`
 }
@@ -149,7 +153,7 @@ type TemplateConfigMapRef struct {
 }
 
 // Notifier is one delivery channel. Exactly the block named by type is set.
-// +kubebuilder:validation:XValidation:rule="self.type == 'Email' ? has(self.email) : !has(self.email)",message="the block named by type must be set, and no other"
+// +kubebuilder:validation:XValidation:rule="(self.type == 'Email') == has(self.email) && (self.type == 'Slack') == has(self.slack)",message="the block named by type must be set, and no other"
 type Notifier struct {
 	// type selects the channel.
 	// +required
@@ -158,6 +162,48 @@ type Notifier struct {
 	// email configures an Email notifier.
 	// +optional
 	Email *EmailNotifier `json:"email,omitempty"`
+
+	// slack configures a Slack notifier.
+	// +optional
+	Slack *SlackNotifier `json:"slack,omitempty"`
+}
+
+// SlackNotifier posts the report to one or more Slack incoming webhooks (ADR 0017).
+type SlackNotifier struct {
+	// targets are the webhooks the report is posted to. Each one succeeds or fails on its own.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=20
+	// +required
+	Targets []SlackTarget `json:"targets"`
+}
+
+// SlackTarget is one Slack incoming webhook.
+type SlackTarget struct {
+	// name labels the target in conditions, logs and errors, and names the report Pod's
+	// environment variable for its URL (CYCLOPS_SLACK_<NAME>). Unique across all the Slack
+	// targets of a CertReport. No "_", so two names can never map to the same variable.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +required
+	Name string `json:"name"`
+
+	// urlSecretRef names a Secret in the cyclops namespace holding the webhook URL under the
+	// key "url". The URL is a credential, so it is never in the spec.
+	// +required
+	URLSecretRef SecretRef `json:"urlSecretRef"`
+}
+
+// SecretRef names a Secret in the cyclops namespace.
+type SecretRef struct {
+	// name of the Secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +required
+	Name string `json:"name"`
 }
 
 // EmailNotifier holds the per-report email settings. Provider and credentials

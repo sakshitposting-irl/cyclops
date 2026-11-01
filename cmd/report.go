@@ -15,8 +15,9 @@ limitations under the License.
 */
 
 // report.go is report mode, run as `cyclops report` by the CronJob's Pod: it loads the CertReport,
-// lists and evaluates the certificates in scope, renders the email, and sends it to the notifiers.
-// It sends nothing when there are no findings, except for the welcome email (ADR 0015).
+// lists and evaluates the certificates in scope, and sends the report to its notifiers: an email
+// rendered from the template, and Slack messages (ADR 0017). It sends nothing when there are no
+// findings, except for the welcome (ADR 0015).
 
 package main
 
@@ -27,6 +28,7 @@ import (
 	"fmt"
 	"html/template"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +47,7 @@ import (
 	"github.com/sakshitposting-irl/cyclops/internal/email"
 	"github.com/sakshitposting-irl/cyclops/internal/render"
 	"github.com/sakshitposting-irl/cyclops/internal/report"
+	"github.com/sakshitposting-irl/cyclops/internal/webhooks"
 )
 
 // Report mode (ADR 0006). The CronJob's Pod runs this same binary as
@@ -111,6 +114,10 @@ func parseReportFlags(args []string) (reportOptions, error) {
 // pass a fake.
 type senderFactory func(ctx context.Context) (email.Sender, error)
 
+// slackFactory builds the Sender for one Slack target from its name. generateReport calls it only
+// when it has something to send, and tests can pass a fake.
+type slackFactory func(name string) (webhooks.Sender, error)
+
 // newReportScheme is the scheme report mode reads with: core types (the template ConfigMap),
 // the CertReport, and the cert-manager and ACME types certmanager.List reads. The manager's
 // scheme in main.go lacks the cert-manager types, hence a separate one.
@@ -167,7 +174,11 @@ func runReport(ctx context.Context, args []string) error {
 	newSender := func(ctx context.Context) (email.Sender, error) {
 		return email.FromEnv(ctx, os.Getenv)
 	}
-	return generateReport(ctx, c, newSender, opts, time.Now())
+	// Each Slack target's URL is in its own env var, named from the target (ADR 0017).
+	newSlack := func(name string) (webhooks.Sender, error) {
+		return webhooks.SlackFromEnv(name, os.Getenv)
+	}
+	return generateReport(ctx, c, newSender, newSlack, opts, time.Now())
 }
 
 // generateReport is one report run. now is passed in so tests control the clock.
@@ -176,8 +187,9 @@ func runReport(ctx context.Context, args []string) error {
 //  1. Load the CertReport.
 //  2. List the certificates in scope and evaluate them into findings.
 //  3. Exit quietly if there are none, unless this is the welcome run (ADR 0015).
-//  4. Load the template and render the subject and body.
-//  5. Build the sender and deliver to every notifier.
+//  4. If there is an Email notifier, load the template, render the subject and body, and build
+//     the email sender.
+//  5. Deliver to every notifier. Slack builds its messages from the data itself (ADR 0017).
 //
 // A failure at any step returns an error, so the Job fails and Kubernetes records the run as
 // failed.
@@ -186,7 +198,8 @@ func runReport(ctx context.Context, args []string) error {
 // and Namespaces on the template data. Findings stays truthful, but the built-in welcome template
 // does not show it.
 func generateReport(
-	ctx context.Context, c client.Reader, newSender senderFactory, opts reportOptions, now time.Time,
+	ctx context.Context, c client.Reader, newSender senderFactory, newSlack slackFactory, opts reportOptions,
+	now time.Time,
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 
@@ -216,15 +229,23 @@ func generateReport(
 		return nil
 	}
 
-	// The template is loaded after the early exit, so a quiet day never reads the ConfigMap. A
-	// bad custom template fails the run here, before anything is sent.
-	load := loadTemplate
 	data := render.NewTemplateData(cr.Name, now, findings)
 	if opts.Welcome {
-		load = loadWelcomeTemplate
 		data.Welcome = true
 		data.Schedule = cr.Spec.Schedule
 		data.Namespaces = cr.Spec.Namespaces
+	}
+	if !slices.ContainsFunc(cr.Spec.Notifiers, func(n cyclopsv1alpha1.Notifier) bool {
+		return n.Type == cyclopsv1alpha1.NotifierTypeEmail
+	}) {
+		return sendToNotifiers(ctx, nil, newSlack, cr.Spec.Notifiers, data, emailContent{})
+	}
+
+	// The template is loaded after the early exit, so a quiet day never reads the ConfigMap. A
+	// bad custom template fails the run here, before anything is sent.
+	load := loadTemplate
+	if opts.Welcome {
+		load = loadWelcomeTemplate
 	}
 	tmpl, err := load(ctx, c, &cr, opts.Namespace, opts.DefaultTemplateConfigMap)
 	if err != nil {
@@ -242,16 +263,21 @@ func generateReport(
 	if err != nil {
 		return fmt.Errorf("building the email sender: %w", err)
 	}
-	return sendToNotifiers(ctx, sender, cr.Spec.Notifiers, subject, body)
+	return sendToNotifiers(ctx, sender, newSlack, cr.Spec.Notifiers, data, emailContent{subject, body})
 }
 
-// sendToNotifiers delivers one rendered report to every notifier. It does not stop at the
-// first failure: one bad recipient list must not silence the others. All failures are
-// returned joined, so the Job fails and every cause is in its log. A notifier that is not
-// understood (a type added to the schema before this binary supports it) is an error too,
-// not a silent skip, so a report is never dropped without anyone knowing.
+// emailContent is the rendered email: the subject set in code and the HTML body from the template.
+type emailContent struct{ subject, body string }
+
+// sendToNotifiers delivers one report to every notifier: mail, rendered into the email sent by
+// sender, and data, from which each Slack target's sender builds its own messages. It does not
+// stop at the first failure: one bad recipient list or Slack target must not silence the others
+// (ADR 0017). All failures are returned joined, so the Job fails and every cause is in its log. A
+// notifier that is not understood (a type added to the schema before this binary supports it) is
+// an error too, not a silent skip, so a report is never dropped without anyone knowing.
 func sendToNotifiers(
-	ctx context.Context, sender email.Sender, notifiers []cyclopsv1alpha1.Notifier, subject, body string,
+	ctx context.Context, sender email.Sender, newSlack slackFactory, notifiers []cyclopsv1alpha1.Notifier,
+	data render.TemplateData, mail emailContent,
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 	var errs []error
@@ -259,8 +285,8 @@ func sendToNotifiers(
 		switch {
 		case n.Type == cyclopsv1alpha1.NotifierTypeEmail && n.Email != nil:
 			msg := email.Message{
-				From: n.Email.From, To: n.Email.To, Subject: subject, HTMLBody: body,
-				Inline: render.InlineImages(body),
+				From: n.Email.From, To: n.Email.To, Subject: mail.subject, HTMLBody: mail.body,
+				Inline: render.InlineImages(mail.body),
 			}
 			if err := sender.Send(ctx, msg); err != nil {
 				errs = append(errs, fmt.Errorf("notifier %d (Email to %s): %w", i, strings.Join(n.Email.To, ", "), err))
@@ -269,6 +295,21 @@ func sendToNotifiers(
 			log.Info("report sent", "notifier", i, "to", n.Email.To)
 		case n.Type == cyclopsv1alpha1.NotifierTypeEmail:
 			errs = append(errs, fmt.Errorf("notifier %d: type Email has no email block", i))
+		case n.Type == cyclopsv1alpha1.NotifierTypeSlack && n.Slack != nil:
+			// The sender's errors already name the target, and never contain its URL.
+			for _, t := range n.Slack.Targets {
+				s, err := newSlack(t.Name)
+				if err == nil {
+					err = s.Send(ctx, data)
+				}
+				if err != nil {
+					errs = append(errs, fmt.Errorf("notifier %d (Slack): %w", i, err))
+					continue
+				}
+				log.Info("report sent", "notifier", i, "slack", t.Name)
+			}
+		case n.Type == cyclopsv1alpha1.NotifierTypeSlack:
+			errs = append(errs, fmt.Errorf("notifier %d: type Slack has no slack block", i))
 		default:
 			errs = append(errs, fmt.Errorf("notifier %d: unsupported type %q", i, n.Type))
 		}

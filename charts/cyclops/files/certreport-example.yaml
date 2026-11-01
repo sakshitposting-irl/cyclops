@@ -18,6 +18,14 @@ spec:
       email:
         from: cyclops@example.com
         to: [platform@example.com]
+    # Or post to Slack. Each target's webhook URL lives in a Secret in the cyclops namespace,
+    # under the key "url":
+    #   kubectl -n cyclops-system create secret generic slack-oncall --from-literal=url=https://hooks.slack.com/services/...
+    # - type: Slack
+    #   slack:
+    #     targets:
+    #       - name: oncall                       # lowercase letters, digits and "-"
+    #         urlSecretRef: {name: slack-oncall}
   # Optional, shown with their defaults:
   # suspend: false
   # startingDeadlineSeconds: 3600

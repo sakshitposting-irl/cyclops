@@ -123,17 +123,65 @@ spec:
                       - from
                       - to
                       type: object
+                    slack:
+                      description: slack configures a Slack notifier.
+                      properties:
+                        targets:
+                          description: targets are the webhooks the report is posted
+                            to. Each one succeeds or fails on its own.
+                          items:
+                            description: SlackTarget is one Slack incoming webhook.
+                            properties:
+                              name:
+                                description: |-
+                                  name labels the target in conditions, logs and errors, and names the report Pod's
+                                  environment variable for its URL (CYCLOPS_SLACK_<NAME>). Unique across all the Slack
+                                  targets of a CertReport. No "_", so two names can never map to the same variable.
+                                maxLength: 63
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                              urlSecretRef:
+                                description: |-
+                                  urlSecretRef names a Secret in the cyclops namespace holding the webhook URL under the
+                                  key "url". The URL is a credential, so it is never in the spec.
+                                properties:
+                                  name:
+                                    description: name of the Secret.
+                                    maxLength: 253
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                            required:
+                            - name
+                            - urlSecretRef
+                            type: object
+                          maxItems: 20
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                      required:
+                      - targets
+                      type: object
                     type:
                       description: type selects the channel.
                       enum:
                       - Email
+                      - Slack
                       type: string
                   required:
                   - type
                   type: object
                   x-kubernetes-validations:
                   - message: the block named by type must be set, and no other
-                    rule: 'self.type == ''Email'' ? has(self.email) : !has(self.email)'
+                    rule: (self.type == 'Email') == has(self.email) && (self.type
+                      == 'Slack') == has(self.slack)
+                maxItems: 10
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: atomic
@@ -175,6 +223,11 @@ spec:
             - message: namespaces and ingressAnnotationMode are mutually exclusive
               rule: '!(has(self.ingressAnnotationMode) && self.ingressAnnotationMode
                 && has(self.namespaces) && size(self.namespaces) > 0)'
+            - message: Slack target names must be unique across all the notifiers
+                of a CertReport
+              rule: self.notifiers.all(a, !has(a.slack) || a.slack.targets.all(t,
+                self.notifiers.filter(b, has(b.slack) && b.slack.targets.exists(u,
+                u.name == t.name)).size() == 1))
           status:
             description: status defines the observed state of CertReport
             properties:

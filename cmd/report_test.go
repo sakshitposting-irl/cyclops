@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -34,6 +35,7 @@ import (
 	"github.com/sakshitposting-irl/cyclops/internal/email"
 	"github.com/sakshitposting-irl/cyclops/internal/render"
 	"github.com/sakshitposting-irl/cyclops/internal/report"
+	"github.com/sakshitposting-irl/cyclops/internal/webhooks"
 )
 
 // Values shared by the report tests.
@@ -56,7 +58,7 @@ func TestGenerateReport_MissingCertReportIsAnError(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
-	err = generateReport(context.Background(), c, nil,
+	err = generateReport(context.Background(), c, nil, nil,
 		reportOptions{CertReportName: "gone", Namespace: testCyclopsNS}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), `CertReport "gone" not found`) {
 		t.Fatalf("generateReport() error = %v, want a not-found error naming the CertReport", err)
@@ -137,6 +139,45 @@ func (f *fakeSender) Send(_ context.Context, msg email.Message) error {
 	return nil
 }
 
+// fakeSlack records, per target, the reports it is asked to post. fail, if set, can reject one.
+type fakeSlack struct {
+	name string
+	hub  *slackHub
+}
+
+// slackHub hands out fakeSlack senders and collects what they post, by target name.
+type slackHub struct {
+	sent    map[string][]render.TemplateData
+	fail    func(name string) error
+	missing map[string]bool // targets whose env var is "unset": the factory fails for them
+}
+
+func (f *fakeSlack) Send(_ context.Context, data render.TemplateData) error {
+	f.hub.sent[f.name] = append(f.hub.sent[f.name], data)
+	if f.hub.fail != nil {
+		return f.hub.fail(f.name)
+	}
+	return nil
+}
+
+func (h *slackHub) factory(name string) (webhooks.Sender, error) {
+	if h.missing[name] {
+		return nil, fmt.Errorf("slack target %q: env var is empty", name)
+	}
+	return &fakeSlack{name: name, hub: h}, nil
+}
+
+// slackNotifier is a CertReport notifier of type Slack with one target per name.
+func slackNotifier(names ...string) cyclopsv1alpha1.Notifier {
+	n := cyclopsv1alpha1.Notifier{Type: cyclopsv1alpha1.NotifierTypeSlack, Slack: &cyclopsv1alpha1.SlackNotifier{}}
+	for _, name := range names {
+		n.Slack.Targets = append(n.Slack.Targets, cyclopsv1alpha1.SlackTarget{
+			Name: name, URLSecretRef: cyclopsv1alpha1.SecretRef{Name: "slack-" + name},
+		})
+	}
+	return n
+}
+
 // emailNotifier is a CertReport notifier of type Email.
 func emailNotifier(to ...string) cyclopsv1alpha1.Notifier {
 	return cyclopsv1alpha1.Notifier{
@@ -152,6 +193,7 @@ type runFixture struct {
 	sender     *fakeSender
 	newSender  senderFactory
 	factoryHit int
+	slack      *slackHub
 }
 
 func newRunFixture(t *testing.T, withExpired bool, notifiers ...cyclopsv1alpha1.Notifier) *runFixture {
@@ -176,6 +218,7 @@ func newRunFixture(t *testing.T, withExpired bool, notifiers ...cyclopsv1alpha1.
 	f := &runFixture{
 		c:      fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build(),
 		sender: &fakeSender{},
+		slack:  &slackHub{sent: map[string][]render.TemplateData{}},
 	}
 	f.newSender = func(context.Context) (email.Sender, error) {
 		f.factoryHit++
@@ -187,7 +230,7 @@ func newRunFixture(t *testing.T, withExpired bool, notifiers ...cyclopsv1alpha1.
 func (f *runFixture) run(welcome bool) error {
 	now := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
 	opts := reportOptions{CertReportName: testReportName, Namespace: testCyclopsNS, Welcome: welcome}
-	return generateReport(context.Background(), f.c, f.newSender, opts, now)
+	return generateReport(context.Background(), f.c, f.newSender, f.slack.factory, opts, now)
 }
 
 func TestGenerateReport(t *testing.T) {
@@ -266,6 +309,91 @@ func TestGenerateReport(t *testing.T) {
 		}
 		if len(f.sender.sent) != 0 {
 			t.Fatalf("sent %d messages, want none", len(f.sender.sent))
+		}
+	})
+}
+
+func TestGenerateReportSlack(t *testing.T) {
+	t.Run("a healthy day posts nothing and builds no Slack sender", func(t *testing.T) {
+		f := newRunFixture(t, false, slackNotifier("oncall"))
+		if err := f.run(false); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.slack.sent) != 0 {
+			t.Fatalf("posted %v, want nothing (ADR 0015)", f.slack.sent)
+		}
+	})
+
+	t.Run("findings go to every target, and a webhook-only report never builds the email sender", func(t *testing.T) {
+		f := newRunFixture(t, true, slackNotifier("oncall", "platform-certs"))
+		if err := f.run(false); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		for _, name := range []string{"oncall", "platform-certs"} {
+			got := f.slack.sent[name]
+			if len(got) != 1 || len(got[0].Findings) != 1 || got[0].Findings[0].Name != "old-cert" || got[0].Welcome {
+				t.Fatalf("target %s got %+v, want one report with old-cert", name, got)
+			}
+		}
+		if f.factoryHit != 0 {
+			t.Fatalf("email sender built %d times, want 0", f.factoryHit)
+		}
+	})
+
+	t.Run("email and Slack together both receive the report", func(t *testing.T) {
+		f := newRunFixture(t, true, emailNotifier("to@example.com"), slackNotifier("oncall"))
+		if err := f.run(false); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		if len(f.sender.sent) != 1 || len(f.slack.sent["oncall"]) != 1 {
+			t.Fatalf("email sent %d, slack posted %d; want 1 each", len(f.sender.sent), len(f.slack.sent["oncall"]))
+		}
+	})
+
+	t.Run("one failing target does not stop the others, and the run fails naming it", func(t *testing.T) {
+		f := newRunFixture(t, true, slackNotifier("broken", "oncall"), emailNotifier("to@example.com"))
+		f.slack.fail = func(name string) error {
+			if name == "broken" {
+				return errors.New(`slack target "broken": status 404`)
+			}
+			return nil
+		}
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), `slack target "broken"`) {
+			t.Fatalf("generateReport() error = %v, want it to name the failed target", err)
+		}
+		if len(f.slack.sent["oncall"]) != 1 || len(f.sender.sent) != 1 {
+			t.Fatalf("the other target and the email must still be sent: slack %v, email %d", f.slack.sent, len(f.sender.sent))
+		}
+	})
+
+	t.Run("a target whose URL is missing fails, and the others still post", func(t *testing.T) {
+		f := newRunFixture(t, true, slackNotifier("unset", "oncall"))
+		f.slack.missing = map[string]bool{"unset": true}
+		err := f.run(false)
+		if err == nil || !strings.Contains(err.Error(), `slack target "unset"`) {
+			t.Fatalf("generateReport() error = %v, want it to name the target", err)
+		}
+		if len(f.slack.sent["oncall"]) != 1 {
+			t.Fatalf("oncall got %d posts, want 1", len(f.slack.sent["oncall"]))
+		}
+	})
+
+	t.Run("type Slack without a slack block is an error", func(t *testing.T) {
+		f := newRunFixture(t, true, cyclopsv1alpha1.Notifier{Type: cyclopsv1alpha1.NotifierTypeSlack})
+		if err := f.run(false); err == nil || !strings.Contains(err.Error(), "has no slack block") {
+			t.Fatalf("generateReport() error = %v, want a missing-block error", err)
+		}
+	})
+
+	t.Run("the welcome run posts the welcome to every target", func(t *testing.T) {
+		f := newRunFixture(t, false, slackNotifier("oncall"))
+		if err := f.run(true); err != nil {
+			t.Fatalf("generateReport() error = %v", err)
+		}
+		got := f.slack.sent["oncall"]
+		if len(got) != 1 || !got[0].Welcome || got[0].Schedule != "0 8 * * *" {
+			t.Fatalf("posted %+v, want one welcome with the schedule", got)
 		}
 	})
 }
