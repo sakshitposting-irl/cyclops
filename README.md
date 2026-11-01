@@ -7,7 +7,7 @@ becomes an outage.
 
 cyclops is a Kubernetes controller that watches cert-manager `Certificate` resources. "Overdue"
 means past the renewal time cert-manager set for the certificate. Reports go out by email (SES or
-SMTP) or to Slack (built on `main`, not in a release yet).
+SMTP) or to Slack (from `v0.1.0-beta.8`).
 
 cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
 one-time welcome message per report configuration explains this and proves delivery works. It ships
@@ -19,7 +19,7 @@ in the published beta (use `v0.1.0-beta.7` or newer).
 > a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
 > emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
 > up on the `CertReport`. The Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md))
-> is built on `main` but not released, and has not run on a cluster or against real Slack. SMTP with a login has also run against
+> is new in `v0.1.0-beta.8`: it has run on kind against a fake Slack, not yet against real Slack. SMTP with a login has also run against
 > Gmail, with STARTTLS on port 587 and TLS on port 465; SES has not been run against real AWS (only against a fake client). See [Status](#status),
 > [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
 
@@ -133,12 +133,12 @@ a `url` key ([ADR 0017](docs/decisions/0017-webhook-notifier.md)).
 | Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
 | Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
 | Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
-| Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) | Built on `main`, not released. `type: Slack` with `slack.targets[]` (`name`, `urlSecretRef`), one Secret per webhook (key `url`), checked by `CredentialsFound`. Unit- and envtest-tested, and run against a local fake Slack (retries, splitting, the 1s gap between parts). Not run on a cluster or against real Slack, so Slack's message limits are untested. A generic webhook and Teams are not decided |
+| Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) | Done and published (from `v0.1.0-beta.8`). `type: Slack` with `slack.targets[]` (`name`, `urlSecretRef`), one Secret per webhook (key `url`), checked by `CredentialsFound`. Unit- and envtest-tested, and run on kind against a fake Slack: missing Secret and key, welcome, findings, a 60-certificate report split 1s apart, a dead target retried and named. Not run against real Slack, so Slack's message limits are untested. A generic webhook and Teams are not decided |
 | Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
 | Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.7`). It lints and renders, and installing and upgrading from the published chart have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
-| Published image | `v0.1.0-beta.7`, for linux/amd64 and linux/arm64 |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.8`). It lints and renders, with and without email settings, and installing and upgrading have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
+| Published image | `v0.1.0-beta.8`, for linux/amd64 and linux/arm64 |
 | Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
@@ -190,7 +190,7 @@ make manifests generate
 ## Install the beta
 
 > [!WARNING]
-> `v0.1.0-beta.7` is a beta. It has no Slack notifier; that is on `main`, not released (see [Status](#status)). Use `beta.6` or newer: `beta.5`
+> `v0.1.0-beta.8` is a beta. Use `beta.6` or newer: `beta.5`
 > crash-loops on startup.
 > Real SMTP authentication and STARTTLS have run against Gmail; SES has not been run against real AWS (only against a fake client). Try it on a non-production cluster first,
 > or on kind with [the section below](#try-it-on-kind).
@@ -217,7 +217,7 @@ kubectl -n cyclops-system create secret generic cyclops-mail-credentials \
 `CertReport` only says who gets the email:
 
 ```sh
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.7 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.8 \
   --namespace cyclops-system \
   --set email.smtp.host=smtp.example.com \
   --set email.smtp.credentialsSecretName=cyclops-mail-credentials   # leave out if no login is needed
@@ -229,7 +229,7 @@ unauthenticated relay use `--set email.smtp.tls=None` and no credentials Secret 
 report ServiceAccount an AWS identity, for example an IRSA annotation through
 `reportServiceAccount.annotations`, or name a Secret in `email.ses.credentialsSecretName`.
 
-From the next release (on `main`, not in `beta.7`), email is optional: with neither
+From `beta.8`, email is optional: with neither
 `email.smtp.host` nor `email.ses.region` set, the chart installs no mail settings, for an install
 that only posts to webhooks, such as [Slack](#slack). A `CertReport` with an Email notifier then fails its runs with
 a message saying email is not configured.
@@ -278,7 +278,7 @@ A healthy cluster logs "nothing to report" and sends no email. That is by design
 
 **Without Helm.** The kustomize manifests in `config/` still work: follow
 [Deploying your own build](#deploying-your-own-build), using the published image
-(`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7`) instead of building one. Whether they stay a
+(`ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.8`) instead of building one. Whether they stay a
 second supported install path is not decided ([ADR 0016](docs/decisions/0016-packaging.md)).
 
 ### When a report run fails
@@ -359,8 +359,8 @@ CertReport's recipients, so restrict who can edit Ingresses.
 ### Slack
 
 > [!NOTE]
-> Built on `main`, not in a release yet: `v0.1.0-beta.7` rejects `type: Slack`. It has been tested
-> with envtest and a local fake Slack, not yet on a cluster or against real Slack.
+> New in `v0.1.0-beta.8` (`beta.7` rejects `type: Slack`). It has been tested with envtest and on
+> kind against a fake Slack, not yet against real Slack.
 
 A Slack notifier posts the report to one or more
 [incoming webhooks](https://api.slack.com/messaging/webhooks). A webhook URL is itself a credential
@@ -451,7 +451,7 @@ nothing. Remove everything with `kind delete cluster --name cyclops`.
 ## Deploying your own build
 
 To run a build of your own instead of the published image (or to deploy the published image from
-the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.7` and
+the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v0.1.0-beta.8` and
 skip the build and push line):
 
 ```sh

@@ -74,7 +74,10 @@ instead of `beta.5` (crash-loops on startup) and `beta.6` (no issuer diagnostics
 GHCR); no dedup, [ADR 0022](0022-no-dedup.md); the Slack notifier, [ADR 0017](0017-webhook-notifier.md)
 (partly: a generic webhook and Teams are open).
 
-**Done since `beta.7`, to ship in the next release.**
+**Shipped in `v0.1.0-beta.8`.**
+- The Slack notifier ([ADR 0017](0017-webhook-notifier.md)): CRD, sender, env var wiring and report
+  mode. Run on kind against a fake Slack, not yet against real Slack.
+- Email settings are optional in the chart, for webhook-only installs.
 - `golang.org/x/net` and OpenTelemetry bumped past the `govulncheck` findings (0 affecting).
 - The inline logo now has a file name, so Gmail no longer labels it "noname".
 - The unused webhook server and cross-build `make` targets are removed.
@@ -82,9 +85,8 @@ GHCR); no dedup, [ADR 0022](0022-no-dedup.md); the Slack notifier, [ADR 0017](00
 - `helm install` prints a commented `CertReport` example and the `kubectl explain` commands.
 
 **Next.**
-- The Slack notifier ([ADR 0017](0017-webhook-notifier.md)) is built (CRD, sender, env var
-  wiring, report mode) and tested with envtest and a local fake Slack. Not yet run on a
-  cluster or against real Slack.
+- Slack: send a new welcome when a target's URL is rotated (decided in ADR 0017, not built),
+  and run against real Slack to check its message limits.
 - Check the mail score of the email (HTML only, no `text/plain` part; adding one touches ADR
   0005 and 0013 and is not decided).
 - Still manual-only: `test.yml` and `lint.yml`. Tidy the old `beta.3` and `beta.4` tags.
