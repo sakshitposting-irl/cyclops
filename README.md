@@ -488,8 +488,10 @@ kubectl get certreport <name> -o jsonpath='{.status.conditions}'
 ```
 
 > [!NOTE]
-> The path has been run end to end only on kind with an unauthenticated fake SMTP server. Real
-> SMTP authentication and STARTTLS have run against Gmail, and SES has not been run against real AWS, so expect rough edges.
+> The full path has run end to end on kind: with a fake SMTP server, with real Gmail (SMTP login,
+> STARTTLS on port 587 and TLS on port 465), and with a fake Slack. Two paths have not: SES against
+> real AWS (only a fake client), and real Slack, whose message limits are untested. Expect rough
+> edges there.
 
 If you hit RBAC errors, you may need cluster-admin privileges.
 
