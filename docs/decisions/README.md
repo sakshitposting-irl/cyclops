@@ -54,6 +54,117 @@ works is described in [`../internals/`](../README.md#internals).
   This also settles what `CertReport.status` holds beyond conditions (ADR 0018
   question 8), and whether `kubectl get` gets a health column.
 
+## Where we stopped (2026-11-02): to-do list from a gap review
+
+Notes as written at the end of the day, not new decisions. Each feature below needs its ADR (new or
+amended) before code. Sources are the web links in each item; most were read as search snippets only.
+
+**0a. Rename the project (decide before `v0.1.0`).** "cyclops" collides with two existing
+Kubernetes projects that rank above this one in search: atlassian-labs/cyclops (a node-cycling
+operator, also CRD-based) and cyclops-ui/cyclops (a Kubernetes web UI). Cheap now, expensive after
+v1: the name is in the API group, image, chart, Secrets/ConfigMaps and docs.
+- [ ] Pick a name that says the job and has no Kubernetes collision on GitHub, Artifact Hub or GHCR.
+- [ ] Record it as an ADR (it changes the API group `cyclops.sakshitposting-irl.github.io`, so
+      existing `CertReport`s need a migration note; acceptable while in `v1alpha1` beta).
+- [ ] Rename: Go module path, API group, CRD, image, chart and OCI path, RBAC names,
+      `cyclops-system`, `cyclops-state-<name>`, docs, and the repo (GitHub redirects the old URL).
+- [ ] Last release under the old name (e.g. `v0.1.0-beta.9`), with only pointers to the new one:
+      `deprecated: true` in `charts/cyclops/Chart.yaml` (shown by Helm and Artifact Hub), a
+      `NOTES.txt` line "cyclops is now <new>, see <migration link>", one startup warning in the
+      controller log, and a README banner. Old images and chart stay in GHCR and keep working.
+- [ ] Migration doc (and the same steps in the release notes):
+      1. install the new chart next to the old one;
+      2. recreate the notifier Secrets in the new namespace (ADR 0014, 0017);
+      3. re-apply each `CertReport` with the new `apiVersion` (export, change the group, drop
+         `status`/`resourceVersion`/`uid`/`creationTimestamp`);
+      4. suspend the old `CertReport`s while both installs run, so findings aren't sent twice;
+      5. `helm uninstall` the old release (deleting the old CRD removes the old `CertReport`s and
+         their CronJobs).
+      Note: each migrated `CertReport` sends a new welcome message (ADR 0015); this is expected.
+- [ ] Announce: rename the repo and its description, publish a release with the migration steps
+      (watchers are notified), pin a "We renamed to <new>" Discussion or issue, and update links
+      wherever the project was posted.
+- https://github.com/atlassian-labs/cyclops
+- https://github.com/cyclops-ui/cyclops
+
+**0b. `cyclops check`: one-shot CLI mode (new ADR).** Try it with no install: run report mode
+against the current kubeconfig, print the findings table to stdout, and exit non-zero if there are
+any findings. This lowers the barrier to adoption and also works as a CI gate.
+- [ ] Write the ADR: a subcommand of the same binary (report mode plus a stdout notifier, no
+      `CertReport` needed); flags for `--namespaces` and output format (table/JSON); exit codes
+      (0 = no findings, 1 = findings, 2 = error); uses the caller's own RBAC (needs the same reads as
+      the report Pod).
+- [ ] Decide on also shipping it as a `kubectl` plugin through Krew (`kubectl cyclops check`).
+- [ ] Release binaries for linux/darwin, amd64/arm64 with the release workflow.
+- [ ] README: put `check` in the first screen as the 10-second way to try it.
+- Effort: S, about 2-4 days.
+
+**Cheap fixes first.**
+- [ ] Run the Slack notifier against real Slack and check its message limits.
+- [ ] README RBAC table (report Pod row) omits `issuers`/`clusterissuers`, which the chart grants
+      (`charts/cyclops/templates/rbac.yaml`, ADR 0021). Add them.
+- [ ] Turn on `test.yml` and `lint.yml` (still `workflow_dispatch` only).
+- [ ] Remove or replace the kubebuilder boilerplate in `test/e2e`; `test/cluster` is the real suite.
+- [ ] README "why": cite the MIT xPRO postmortem (2026-06-03; a DNS-01 failure found only at expiry,
+      follow-up "alert earlier on failed CertificateRequests/Orders") and the Kestra
+      cert-manager-to-Slack blueprints as hand-built versions of what cyclops does.
+
+**1. Microsoft Teams notifier (amend ADR 0017).** Office 365 Connectors in Teams were retired
+(Microsoft MC1181996: disabled 2026-05-18 to 05-22; other sources give March/April 2026), so the
+old Incoming Webhook URLs are gone. The replacement is a Workflows webhook taking Adaptive Card
+payloads, so a generic webhook would not cover it.
+- [ ] Amend ADR 0017: `type: Teams`, `teams.targets[]{name, urlSecretRef}`, key `url`, the Slack
+      design copied (env var per target, `CredentialsFound`, welcome hash, retries in the process).
+- [ ] Find the Workflows payload size limit; decide between splitting and one card with "+N more".
+- [ ] Build a `teams.go` Sender in `internal/webhooks`, plus the CRD field and controller/chart wiring.
+- [ ] Run against a real Teams Workflow.
+- Effort: S-M, about 4-6 days.
+- https://mc.merill.net/message/MC1181996
+- https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/
+
+**2. Served-certificate check: renewed, but the old cert is still being served (new ADR, ~0023;
+extends 0009/0012).** cert-manager succeeds, so cyclops stays quiet, while the ingress controller or
+app keeps serving the old cert. Reports: ingress-nginx not reloading, Traefik serving a leftover
+older cert "50% of the time", a 2026-08 how-to for exactly this alert.
+- [ ] Write the ADR. Proposed: opt-in per `CertReport`; Ingress annotation mode only in v1 (hosts
+      from `spec.tls[].hosts`); dial the hostname through normal DNS with SNI; include when the served
+      leaf's `NotAfter` < `Certificate.status.notAfter` and the renewal is more than 1h old; a failed
+      probe never causes inclusion; skip wildcard hosts; up to 3 probes per host, flag if any is stale.
+- [ ] Decide on a CDN in front (its own cert gives false positives on the `notAfter` comparison).
+- [ ] No Secret read needed: the report Pod stays read-only and only gains outbound network access.
+      Document the egress rule on 443 for clusters with NetworkPolicies.
+- [ ] Build `internal/probe` (concurrent, with a cap and a timeout), plus an additive `Row` field
+      (ADR 0013), template and Slack text.
+- [ ] `test/cluster` fixture: a pod mounting the Secret with `subPath` (it never gets updates)
+      behind an annotated Ingress.
+- Effort: M, about 1 week.
+- https://www.digitalocean.com/community/questions/kubernetes-nginx-ingress-certificate-not-updated-from-original-self-signed-certificate
+- https://community.traefik.io/t/old-cert-served-50-of-the-time/29320
+- https://oneuptime.com/blog/post/2026-08-26-how-to-alert-when-automated-lets-encrypt-renewal-succeeds-but-the-service-still-serves-the-old-certificate/markdown
+
+**3. Gateway API in annotation mode (new ADR or amend 0020).** ingress-nginx maintenance ended in
+March 2026 and SIG Network recommends Gateway API. Namespace mode already covers Gateway certs
+(the gateway-shim makes normal Certificates); annotation mode is Ingress-only, so a team that
+migrates silently loses coverage.
+- [ ] Find out whether anyone actually uses annotation mode (Discussion) before building.
+- [ ] Write the ADR: annotate Gateways; map listener `certificateRefs` → Secret → Certificate by
+      `secretName`; same-namespace refs only in v1; a missing Gateway CRD means "no Gateways".
+- [ ] RBAC: report Pod `get`/`list` `gateways.gateway.networking.k8s.io` (chart and `config/rbac`).
+- [ ] kind demo with Envoy Gateway or Cilium.
+- Effort: M, about 1-1.5 weeks.
+- https://kubernetes.io/blog/2025/11/11/ingress-Nginx-retirement/
+
+**Smaller follow-ups.**
+- [ ] External issuers: show the CertificateRequest's `Approved`/`Denied` condition next to ADR
+      0021's `Ready` line (external-issuer requests sit pending without approver RBAC). About a day.
+- [ ] Verify on kind: with cert-manager 1.21's experimental ARI (`ACMEUseARI`), does
+      `status.renewalTime` follow the ARI window? If not, ADR 0012's overdue rule may misfire.
+
+**Considered and dropped:** generic webhook moved down (no demand found); renewal loops under ARI
+(one source, needs cross-run state against ADR 0022); a faster schedule for short-lived certs (the
+daily run plus 1h grace still leaves days of margin); shipped alert rules and raw TLS Secret
+scanning (the Prometheus ecosystem and x509-certificate-exporter already cover them).
+
 ## Where we stopped (2026-10-30): `v0.1.0-beta.7` is published and has been run against Gmail
 
 Notes as written at the end of the day, not new decisions. The two sections below are older and
