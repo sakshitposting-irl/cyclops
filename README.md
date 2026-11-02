@@ -1,191 +1,62 @@
 <h1 align="center"><img src="docs/assets/hero.png" alt="cyclops: keeps an eye on your certificates" width="720"></h1>
 <p align="center"><sub>The one-time welcome email, rendered from the built-in template with sample data.</sub></p>
 
-A backstop for [cert-manager](https://cert-manager.io): a daily report of certificates that are
-expired, never issued, or overdue for renewal, so a silently failing renewal gets noticed before it
-becomes an outage.
+<p align="center">
+  <a href="https://github.com/sakshitposting-irl/cyclops/releases"><img alt="release" src="https://img.shields.io/github/v/release/sakshitposting-irl/cyclops?include_prereleases"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+</p>
 
-cyclops is a Kubernetes controller that watches cert-manager `Certificate` resources. "Overdue"
-means past the renewal time cert-manager set for the certificate. Reports go out by email (SES or
-SMTP) or to Slack (from `v0.1.0-beta.8`).
+**cert-manager renews your certificates automatically, until it silently doesn't.** An ACME
+challenge starts failing, an issuer loses its CA Secret, a renewal stalls, and nobody finds out
+until the site is down. cyclops is the backstop: a Kubernetes controller that emails you or posts to
+Slack when a certificate is **expired, never issued, or overdue for renewal**, and includes
+cert-manager's own failure reason so you can see why.
 
-cyclops only sends a report when something needs attention: a healthy cluster stays quiet. A
-one-time welcome message per report configuration explains this and proves delivery works. It ships
-in the published beta (use `v0.1.0-beta.7` or newer).
+A healthy cluster stays quiet. cyclops only sends a report when something needs attention.
+
+## Why cyclops
+
+- **No Prometheus needed.** It reads cert-manager `Certificate` resources directly. If you already
+  alert on cert-manager metrics, cyclops is a second line of defence that also tells you *why*.
+- **It explains the failure.** Reports include failed attempts, ACME state, and the failure reason
+  word for word. For CA, Vault and self-signed issuers it shows the request's `Ready` reason and
+  the issuer's error ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)).
+- **It tells you when it breaks.** A failed report run shows up as `ReportSucceeding=False` on the
+  `CertReport`, plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)).
+- **Least privilege.** The controller never reads certificates and the report Pod has read-only
+  access. They use separate ServiceAccounts.
+- **Email or Slack.** SMTP, SES or Slack incoming webhooks (Slack from `v0.1.0-beta.8`).
+
+## Quick start
+
+```sh
+kubectl create namespace cyclops-system
+
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 0.1.0-beta.8 \
+  --namespace cyclops-system \
+  --set email.smtp.host=smtp.example.com
+
+kubectl apply -f - <<'YAML'
+apiVersion: cyclops.sakshitposting-irl.github.io/v1alpha1
+kind: CertReport
+metadata: {name: cluster-certs}
+spec:
+  schedule: "0 8 * * *"             # UTC
+  notifiers:
+    - type: Email
+      email: {from: cyclops@example.com, to: [platform@example.com]}
+YAML
+```
+
+Needs a cluster with [cert-manager](https://cert-manager.io) and Helm 3.8+. SMTP logins, SES, Slack
+and every option are in [Install the beta](#install-the-beta). To try it with no real mail server,
+see [Try it on kind](#try-it-on-kind).
 
 > [!NOTE]
 > **Status: beta, in development.** The API is still `v1alpha1` and can change between releases.
-> Install it with Helm from the published chart. The full path has run on a local kind cluster with
-> a fake mail server, installed from the published chart: a `CertReport` becomes a CronJob, a run
-> emails the certificates that need attention, a healthy run sends nothing, and a failed run shows
-> up on the `CertReport`. The Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md))
-> is new in `v0.1.0-beta.8`: it has run on kind against a fake Slack, not yet against real Slack. SMTP with a login has also run against
-> Gmail, with STARTTLS on port 587 and TLS on port 465; SES has not been run against real AWS (only against a fake client). See [Status](#status),
-> [Install the beta](#install-the-beta) and [Try it on kind](#try-it-on-kind).
-
-## How it works
-
-```mermaid
-flowchart LR
-    CR["CertReport<br/>(schedule, scope, notifiers)"] -->|reconciles| CTRL[cyclops controller]
-    CTRL -->|owns| CJ[CronJob]
-    CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
-    JOB -->|lists| CM["cert-manager<br/>Certificates"]
-    JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
-    JOB -->|posts| HOOK["Slack<br/>(incoming webhooks)"]
-```
-
-1. You create a cluster-scoped `CertReport` describing the schedule, what to cover (namespaces, or
-   annotated Ingresses) and who to notify.
-2. The controller keeps a Kubernetes `CronJob` in sync with it.
-3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
-   `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
-   to each notifier (`Email` or `Slack`). If there are none, it sends nothing.
-4. When a `CertReport` is first created, cyclops sends a one-time welcome message that explains
-   when cyclops emails you, with no findings in it. This also checks that delivery works.
-
-For certificates that are due, the report also shows cert-manager's own diagnostics (failed
-attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
-happening. A certificate from a CA, Vault or self-signed issuer has no ACME Order, so the report
-shows the CertificateRequest's `Ready` reason and, if the Issuer or ClusterIssuer is not ready,
-its error (for example a missing CA Secret) ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)).
-This is in `v0.1.0-beta.7`; in `v0.1.0-beta.6` only ACME issuers have a reason.
-
-## Architecture
-
-### Components
-
-cyclops has two kinds of parts: objects stored in the Kubernetes API, which are data and run
-nothing, and Pods, which do the work.
-
-| Component | Kind | Role |
-|---|---|---|
-| `CertReport` | API object (CRD, cluster-scoped) | The user's configuration: schedule, namespaces, notifiers. Defined by the CRD. |
-| `CronJob` | API object | Holds the schedule and the report Pod template. Created and kept in sync by the controller, and owned by its `CertReport`. |
-| `Job` | API object | One per run, created from the CronJob by Kubernetes. Also used for the one-off welcome message. |
-| State `ConfigMap` | API object | `cyclops-state-<name>`: records whether the welcome message was sent. Owned by the `CertReport`. |
-| Controller | Pod (Deployment, always on) | Reconciles `CertReport`s into CronJobs, sets status conditions, and starts the welcome Job. Never reads certificates and never sends a report. |
-| Report Pod | Pod (one-shot, per run) | The same binary in report mode. Lists certificates, decides what to report, renders and sends the message, then exits. |
-
-One controller Pod serves any number of `CertReport`s. Each `CertReport` gets its own CronJob and
-state ConfigMap. Deleting a `CertReport` removes everything it owns through owner references, so
-no finalizers are needed.
-
-### Lifecycle
-
-**Install** (`helm install`, or `make deploy`), in order:
-
-1. The CRD is registered with the API server.
-2. The ServiceAccounts and the RBAC are created in the cyclops namespace (`cyclops-system`).
-   `make deploy` creates the namespace; with Helm you create it first.
-3. The mail ConfigMap is created: by the chart from its values, or by the operator when using
-   `make deploy`. The operator always creates the credentials Secret, if one is needed (see
-   [ADR 0014](docs/decisions/0014-notifier-credentials.md)). cert-manager must already be installed.
-4. The controller Deployment starts and begins watching `CertReport`s.
-
-**Runtime**, for each `CertReport`:
-
-1. A user creates the `CertReport`.
-2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
-   `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
-   also creates a one-off welcome Job and tracks it in the `WelcomeSent` condition.
-3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
-4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
-   the report if anything needs attention.
-5. The Pod exits. Kubernetes keeps finished Jobs according to the CronJob's history limits.
-6. The controller reads the CronJob's status and sets `ReportSucceeding`, so a failed run is
-   visible on the `CertReport` ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)).
-
-### Identities and permissions
-
-The controller and the report Pod run under separate ServiceAccounts, so neither holds the other's
-privileges. The CR and the CronJob are data and hold no permissions of their own.
-
-| Actor | ServiceAccount | Access |
-|---|---|---|
-| Controller | `cyclops-controller-manager` | Read and write `CertReport`s and their status. Manage the CronJob, Jobs and state ConfigMap in `cyclops-system`. Read the Secrets, ConfigMaps and Namespaces it validates (the Namespace check is cluster-wide). Create Events. No access to certificates. |
-| Report Pod | `cyclops-report` | Read-only: `get`/`list` Certificates, CertificateRequests, Orders and Challenges; `get` Ingresses (for annotation mode); `get` its `CertReport`; `get` ConfigMaps in `cyclops-system` for a custom template. No write access. |
-| CronJob scheduling | Kubernetes' built-in CronJob controller | Creates Jobs from the CronJob. Nothing to configure. |
-
-The manager's role is generated from `+kubebuilder:rbac` markers. The report Pod's role is written
-by hand in [`config/rbac/report_*.yaml`](config/rbac), since the markers only describe the manager.
-
-Mail delivery is not governed by Kubernetes RBAC. The report Pod receives its SMTP credentials as
-environment variables from the install-level Secret, or uses an ambient AWS identity for SES (for
-example IRSA on the `cyclops-report` ServiceAccount). The controller never reads the mail password
-([ADR 0014](docs/decisions/0014-notifier-credentials.md)). Slack webhook URLs reach the report Pod
-the same way, one environment variable per target; the controller only checks that each Secret has
-a `url` key ([ADR 0017](docs/decisions/0017-webhook-notifier.md)).
-
-## Status
-
-| Piece | State |
-|---|---|
-| Architecture decisions | Recorded in [`docs/decisions/`](docs/decisions/README.md); a few still open |
-| Deciding which certificates to report (`internal/report`) | Done, tested |
-| Converting cert-manager objects (`internal/certmanager`) | Done, tested |
-| Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
-| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound`, `ReportSucceeding` |
-| `TemplateValid` condition | Done, unit-tested. Checks that the template ConfigMap and key exist and that the template parses (the chart-wide default included); a misspelled field name is only caught when the template runs ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
-| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. `--welcome` sends the welcome message (see below) |
-| Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
-| Email rendering (`internal/render`) | Done, tested |
-| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
-| Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
-| Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
-| Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) | Done and published (from `v0.1.0-beta.8`). `type: Slack` with `slack.targets[]` (`name`, `urlSecretRef`), one Secret per webhook (key `url`), checked by `CredentialsFound`. Unit- and envtest-tested, and run on kind against a fake Slack: missing Secret and key, welcome, findings, a 60-certificate report split 1s apart, a dead target retried and named. Not run against real Slack, so Slack's message limits are untested. A generic webhook and Teams are not decided |
-| Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
-| Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
-| Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.8`). It lints and renders, with and without email settings, and installing and upgrading have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
-| Published image | `v0.1.0-beta.8`, for linux/amd64 and linux/arm64 |
-| Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
-| `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
-| Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
-
-## Documentation
-
-- [**Design decisions**](docs/decisions/README.md): what's been decided, with pros and cons, and
-  what's still open.
-- [**Internals**](docs/README.md#internals): how the code works (startup, leader election, the
-  report pipeline).
-- [**Helm chart**](charts/cyclops/README.md): every value, and how to customise the email template.
-
-## Development
-
-**Prerequisites:** Go 1.26+, Docker, `kubectl`, and a Kubernetes cluster with cert-manager
-installed (for example [kind](https://kind.sigs.k8s.io)). Tool binaries such as `controller-gen`
-and `golangci-lint` are downloaded into `bin/` automatically.
-
-```sh
-make build        # build bin/manager
-make test         # unit tests (envtest)
-make lint         # golangci-lint
-make help         # list all targets
-```
-
-To run the controller from your host against your current kubeconfig context, pass the flags it
-requires (`make run` passes none, so it exits asking for them):
-
-```sh
-POD_NAMESPACE=cyclops-system go run ./cmd --report-image=<image> --leader-elect=false
-```
-
-Cluster validation tests run the report pipeline against a real cluster using the fixtures in
-`test/cluster/testdata/`. They need a kind cluster with cert-manager installed, create and delete
-their own `cyclops-test-*` namespaces, and refuse to run on any context not named `kind-*`:
-
-```sh
-make test-cluster                              # uses the kind-cyclops context
-make test-cluster CLUSTER_CONTEXT=kind-other   # or pick another kind cluster
-```
-
-After editing `api/v1alpha1/*_types.go` or `+kubebuilder` markers, regenerate CRDs, RBAC and
-DeepCopy code:
-
-```sh
-make manifests generate
-```
+> **Tested:** the full path on kind with a fake mail server and a fake Slack, and SMTP against Gmail
+> (STARTTLS on 587, TLS on 465). **Not yet run:** SES against real AWS, and real Slack, so Slack's
+> message limits are untested. Try it on a non-production cluster first. Details in [Status](#status).
 
 ## Install the beta
 
@@ -447,6 +318,188 @@ kubectl -n mailhog port-forward svc/mailhog 8025:8025   # then open http://local
 The report lists `cyclops-test-b/broken` as never issued. Limit the `CertReport` to
 `cyclops-test-a` and run another Job to see a healthy run: it logs "nothing to report" and sends
 nothing. Remove everything with `kind delete cluster --name cyclops`.
+
+## How it works
+
+```mermaid
+flowchart LR
+    CR["CertReport<br/>(schedule, scope, notifiers)"] -->|reconciles| CTRL[cyclops controller]
+    CTRL -->|owns| CJ[CronJob]
+    CJ -->|fires on schedule| JOB["Report Job<br/>(same binary, report mode)"]
+    JOB -->|lists| CM["cert-manager<br/>Certificates"]
+    JOB -->|sends| MAIL["Email<br/>(SES or SMTP)"]
+    JOB -->|posts| HOOK["Slack<br/>(incoming webhooks)"]
+```
+
+1. You create a cluster-scoped `CertReport` describing the schedule, what to cover (namespaces, or
+   annotated Ingresses) and who to notify.
+2. The controller keeps a Kubernetes `CronJob` in sync with it.
+3. On schedule, the CronJob runs cyclops in **report mode**: it lists the cert-manager
+   `Certificate`s in scope (every namespace by default) and picks out the ones that need attention. If there are any, it sends the report
+   to each notifier (`Email` or `Slack`). If there are none, it sends nothing.
+4. When a `CertReport` is first created, cyclops sends a one-time welcome message that explains
+   when cyclops emails you, with no findings in it. This also checks that delivery works.
+
+For certificates that are due, the report also shows cert-manager's own diagnostics (failed
+attempts, ACME state, and the failure reason word for word), so you can see why renewal isn't
+happening. A certificate from a CA, Vault or self-signed issuer has no ACME Order, so the report
+shows the CertificateRequest's `Ready` reason and, if the Issuer or ClusterIssuer is not ready,
+its error (for example a missing CA Secret) ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)).
+This is in `v0.1.0-beta.7`; in `v0.1.0-beta.6` only ACME issuers have a reason.
+
+## Architecture
+
+### Components
+
+cyclops has two kinds of parts: objects stored in the Kubernetes API, which are data and run
+nothing, and Pods, which do the work.
+
+| Component | Kind | Role |
+|---|---|---|
+| `CertReport` | API object (CRD, cluster-scoped) | The user's configuration: schedule, namespaces, notifiers. Defined by the CRD. |
+| `CronJob` | API object | Holds the schedule and the report Pod template. Created and kept in sync by the controller, and owned by its `CertReport`. |
+| `Job` | API object | One per run, created from the CronJob by Kubernetes. Also used for the one-off welcome message. |
+| State `ConfigMap` | API object | `cyclops-state-<name>`: records whether the welcome message was sent. Owned by the `CertReport`. |
+| Controller | Pod (Deployment, always on) | Reconciles `CertReport`s into CronJobs, sets status conditions, and starts the welcome Job. Never reads certificates and never sends a report. |
+| Report Pod | Pod (one-shot, per run) | The same binary in report mode. Lists certificates, decides what to report, renders and sends the message, then exits. |
+
+One controller Pod serves any number of `CertReport`s. Each `CertReport` gets its own CronJob and
+state ConfigMap. Deleting a `CertReport` removes everything it owns through owner references, so
+no finalizers are needed.
+
+### Lifecycle
+
+**Install** (`helm install`, or `make deploy`), in order:
+
+1. The CRD is registered with the API server.
+2. The ServiceAccounts and the RBAC are created in the cyclops namespace (`cyclops-system`).
+   `make deploy` creates the namespace; with Helm you create it first.
+3. The mail ConfigMap is created: by the chart from its values, or by the operator when using
+   `make deploy`. The operator always creates the credentials Secret, if one is needed (see
+   [ADR 0014](docs/decisions/0014-notifier-credentials.md)). cert-manager must already be installed.
+4. The controller Deployment starts and begins watching `CertReport`s.
+
+**Runtime**, for each `CertReport`:
+
+1. A user creates the `CertReport`.
+2. The controller creates the owned CronJob and sets status conditions (`ScheduleValid`,
+   `NamespacesFound`, `CredentialsFound`, `ReportSucceeding`, `TemplateValid`). If no welcome message has been sent, it
+   also creates a one-off welcome Job and tracks it in the `WelcomeSent` condition.
+3. When the schedule fires, Kubernetes' built-in CronJob controller creates a Job.
+4. The Job starts a report Pod, which lists the `Certificate`s in scope, evaluates them, and sends
+   the report if anything needs attention.
+5. The Pod exits. Kubernetes keeps finished Jobs according to the CronJob's history limits.
+6. The controller reads the CronJob's status and sets `ReportSucceeding`, so a failed run is
+   visible on the `CertReport` ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)).
+
+### Identities and permissions
+
+The controller and the report Pod run under separate ServiceAccounts, so neither holds the other's
+privileges. The CR and the CronJob are data and hold no permissions of their own.
+
+| Actor | ServiceAccount | Access |
+|---|---|---|
+| Controller | `cyclops-controller-manager` | Read and write `CertReport`s and their status. Manage the CronJob, Jobs and state ConfigMap in `cyclops-system`. Read the Secrets, ConfigMaps and Namespaces it validates (the Namespace check is cluster-wide). Create Events. No access to certificates. |
+| Report Pod | `cyclops-report` | Read-only: `get`/`list` Certificates, CertificateRequests, Orders and Challenges; `get` Ingresses (for annotation mode); `get` its `CertReport`; `get` ConfigMaps in `cyclops-system` for a custom template. No write access. |
+| CronJob scheduling | Kubernetes' built-in CronJob controller | Creates Jobs from the CronJob. Nothing to configure. |
+
+The manager's role is generated from `+kubebuilder:rbac` markers. The report Pod's role is written
+by hand in [`config/rbac/report_*.yaml`](config/rbac), since the markers only describe the manager.
+
+Mail delivery is not governed by Kubernetes RBAC. The report Pod receives its SMTP credentials as
+environment variables from the install-level Secret, or uses an ambient AWS identity for SES (for
+example IRSA on the `cyclops-report` ServiceAccount). The controller never reads the mail password
+([ADR 0014](docs/decisions/0014-notifier-credentials.md)). Slack webhook URLs reach the report Pod
+the same way, one environment variable per target; the controller only checks that each Secret has
+a `url` key ([ADR 0017](docs/decisions/0017-webhook-notifier.md)).
+
+## Releases
+
+Newest first. All are pre-releases of `v0.1.0`; use the latest. From `beta.2` on, each tag
+publishes the image `ghcr.io/sakshitposting-irl/cyclops:<tag>` and the chart
+`oci://ghcr.io/sakshitposting-irl/charts/cyclops` (version without the `v`).
+
+| Release | Date | Shipped |
+|---|---|---|
+| **`v0.1.0-beta.8`** (latest) | 2026-11-02 | Slack notifier, `type: Slack` ([ADR 0017](docs/decisions/0017-webhook-notifier.md)). Email settings optional in the chart, for webhook-only installs. `helm install` prints a commented `CertReport` example. The inline logo has a file name (Gmail no longer shows "noname"). `golang.org/x/net` and OpenTelemetry bumped past `govulncheck` findings. Unused webhook server removed |
+| `v0.1.0-beta.7` | 2026-10-29 | Diagnostics for non-ACME failures: the CertificateRequest's and Issuer's `Ready` reason ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)). Ingress annotation mode tests filled in |
+| `v0.1.0-beta.6` | 2026-10-28 | Fix: the controller's Job cache is limited to the cyclops namespace, which fixes `beta.5`'s crash loop. First working release with the welcome message |
+| `v0.1.0-beta.5` | 2026-10-28 | One-time welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) and the inline logo in the email. The release workflow attaches the chart to an existing release. **Crash-loops on startup; do not use** |
+| `v0.1.0-beta.3`, `beta.4` | 2026-10-27 | Same commit as `beta.5`'s code. Their release runs failed before the chart was attached to the GitHub release. **Do not use** |
+| `v0.1.0-beta.2` | 2026-10-25 | Tag-triggered release workflow (multi-arch image, OCI chart, GitHub pre-release). `TemplateValid` condition ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
+| `v0.1.0-beta.1` | 2026-10-21 | Ingress annotation mode ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)). First Helm chart. `CONTRIBUTING.md` |
+| `v0.1.0-alpha.2` | 2026-10-14 | `ReportSucceeding` condition plus a Warning Event for failed runs ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)) |
+| `v0.1.0-alpha.1` | 2026-10-11 | First release: `CertReport` → owned `CronJob`; report mode (list Certificates, pick expired, never issued or overdue, render, send); email by SMTP or SES; `ScheduleValid`, `NamespacesFound` and `CredentialsFound` conditions |
+
+## Status
+
+| Piece | State |
+|---|---|
+| Architecture decisions | Recorded in [`docs/decisions/`](docs/decisions/README.md); a few still open |
+| Deciding which certificates to report (`internal/report`) | Done, tested |
+| Converting cert-manager objects (`internal/certmanager`) | Done, tested |
+| Listing certificates from the cluster (`internal/certmanager`) | Done, tested (unit + cluster) |
+| `CertReport` → `CronJob` reconciliation (`internal/controller`) | Done, tested, and run on kind: owned CronJob, `ScheduleValid`, `CredentialsFound`, `NamespacesFound`, `ReportSucceeding` |
+| `TemplateValid` condition | Done, unit-tested. Checks that the template ConfigMap and key exist and that the template parses (the chart-wide default included); a misspelled field name is only caught when the template runs ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
+| Report mode (`cyclops report`, run by the CronJob's Pod) | Done, unit-tested, and run on kind against a fake SMTP server. `--welcome` sends the welcome message (see below) |
+| Report Pod RBAC (`config/rbac/report_*.yaml`) | Done, works on kind |
+| Email rendering (`internal/render`) | Done, tested |
+| Email sending: SMTP (`internal/email`) | Done, tested against an in-process fake server, and run against Gmail (STARTTLS on port 587 and TLS on port 465, with a login) |
+| Email sending: SES (`internal/email`) | Done, tested against a fake client only. Not run against real AWS, so the sender identity, sandbox limits, IAM policy and IRSA setup are untested |
+| Email sending: env-based provider selection, `FromEnv` (`internal/email`) | Done, tested |
+| Slack notifier ([ADR 0017](docs/decisions/0017-webhook-notifier.md)) | Done and published (from `v0.1.0-beta.8`). `type: Slack` with `slack.targets[]` (`name`, `urlSecretRef`), one Secret per webhook (key `url`), checked by `CredentialsFound`. Unit- and envtest-tested, and run on kind against a fake Slack: missing Secret and key, welcome, findings, a 60-certificate report split 1s apart, a dead target retried and named. Not run against real Slack, so Slack's message limits are untested. A generic webhook and Teams are not decided |
+| Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
+| Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
+| Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`0.1.0-beta.8`). It lints and renders, with and without email settings, and installing and upgrading have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
+| Published image | `v0.1.0-beta.8`, for linux/amd64 and linux/arm64 |
+| Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
+| `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
+| Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
+
+## Documentation
+
+- [**Design decisions**](docs/decisions/README.md): what's been decided, with pros and cons, and
+  what's still open.
+- [**Internals**](docs/README.md#internals): how the code works (startup, leader election, the
+  report pipeline).
+- [**Helm chart**](charts/cyclops/README.md): every value, and how to customise the email template.
+
+## Development
+
+**Prerequisites:** Go 1.26+, Docker, `kubectl`, and a Kubernetes cluster with cert-manager
+installed (for example [kind](https://kind.sigs.k8s.io)). Tool binaries such as `controller-gen`
+and `golangci-lint` are downloaded into `bin/` automatically.
+
+```sh
+make build        # build bin/manager
+make test         # unit tests (envtest)
+make lint         # golangci-lint
+make help         # list all targets
+```
+
+To run the controller from your host against your current kubeconfig context, pass the flags it
+requires (`make run` passes none, so it exits asking for them):
+
+```sh
+POD_NAMESPACE=cyclops-system go run ./cmd --report-image=<image> --leader-elect=false
+```
+
+Cluster validation tests run the report pipeline against a real cluster using the fixtures in
+`test/cluster/testdata/`. They need a kind cluster with cert-manager installed, create and delete
+their own `cyclops-test-*` namespaces, and refuse to run on any context not named `kind-*`:
+
+```sh
+make test-cluster                              # uses the kind-cyclops context
+make test-cluster CLUSTER_CONTEXT=kind-other   # or pick another kind cluster
+```
+
+After editing `api/v1alpha1/*_types.go` or `+kubebuilder` markers, regenerate CRDs, RBAC and
+DeepCopy code:
+
+```sh
+make manifests generate
+```
 
 ## Deploying your own build
 
