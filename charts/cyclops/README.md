@@ -4,7 +4,7 @@ Installs the cyclops controller, its CRD (`CertReport`), RBAC, and the install-l
 (ADR 0014). **Beta (v1alpha1).** The chart is published to GHCR as an OCI chart:
 
 ```bash
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.2 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.3 \
   -n cyclops-system --create-namespace \
   --set email.smtp.host=smtp.example.com
 ```

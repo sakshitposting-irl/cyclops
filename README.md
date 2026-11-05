@@ -33,7 +33,7 @@ A healthy cluster stays quiet. cyclops only sends a report when something needs 
 ```sh
 kubectl create namespace cyclops-system
 
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.2 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.3 \
   --namespace cyclops-system \
   --set email.smtp.host=smtp.example.com
 
@@ -54,7 +54,7 @@ and every option are in [Install](#install). To try it with no real mail server,
 see [Try it on kind](#try-it-on-kind).
 
 > [!NOTE]
-> **Status: `v1.0.2`.** The API is still `v1alpha1` and can change between releases.
+> **Status: `v1.0.3`.** The API is still `v1alpha1` and can change between releases.
 > **Tested:** the full path on kind with a fake mail server and a fake Slack, and SMTP against Gmail
 > (STARTTLS on 587, TLS on 465). **Not yet run:** SES against real AWS, and real Slack, so Slack's
 > message limits are untested. Try it on a non-production cluster first. Details in [Status](#status).
@@ -93,7 +93,7 @@ kubectl -n cyclops-system create secret generic cyclops-mail-credentials \
 `CertReport` only says who gets the email:
 
 ```sh
-helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.2 \
+helm install cyclops oci://ghcr.io/sakshitposting-irl/charts/cyclops --version 1.0.3 \
   --namespace cyclops-system \
   --set email.smtp.host=smtp.example.com \
   --set email.smtp.credentialsSecretName=cyclops-mail-credentials   # leave out if no login is needed
@@ -154,7 +154,7 @@ A healthy cluster logs "nothing to report" and sends no email. That is by design
 
 **Without Helm.** The kustomize manifests in `config/` still work: follow
 [Deploying your own build](#deploying-your-own-build), using the published image
-(`ghcr.io/sakshitposting-irl/cyclops:v1.0.2`) instead of building one. Whether they stay a
+(`ghcr.io/sakshitposting-irl/cyclops:v1.0.3`) instead of building one. Whether they stay a
 second supported install path is not decided ([ADR 0016](docs/decisions/0016-packaging.md)).
 
 ### When a report run fails
@@ -426,7 +426,8 @@ publishes the image `ghcr.io/sakshitposting-irl/cyclops:<tag>` and the chart
 
 | Release | Date | Shipped |
 |---|---|---|
-| **`v1.0.2`** (latest) | 2026-11-05 | Security and release-pipeline update, no behaviour change: `golang.org/x/net` bumped to v0.62.0 (CVE-2026-78661, CVE-2026-97045). The chart in GHCR is now signed with keyless cosign (how to verify: [chart README](charts/cyclops/README.md#verifying-the-chart-signature)). The API is still `v1alpha1` |
+| **`v1.0.3`** (latest) | 2026-11-05 | The Artifact Hub icon is now a square crop of the logo mark (`docs/assets/icon.png`), so it is readable at the size Artifact Hub shows it. No code change |
+| `v1.0.2` | 2026-11-05 | Security and release-pipeline update, no behaviour change: `golang.org/x/net` bumped to v0.62.0 (CVE-2026-78661, CVE-2026-97045). The chart in GHCR is now signed with keyless cosign (how to verify: [chart README](charts/cyclops/README.md#verifying-the-chart-signature)). The API is still `v1alpha1` |
 | `v1.0.1` | 2026-11-05 | Same code as `v1.0.2`. **Do not use:** its release run failed after the image and chart were pushed, so it has no GitHub release and the chart is unsigned |
 | `v0.1.0` | 2026-11-05 | The first non-beta release: the same code as `beta.8`, with the chart's Artifact Hub metadata, issue forms for bugs and test reports, and a social preview image. SES against real AWS and real Slack are still untested |
 | `v0.1.0-beta.8` | 2026-11-02 | Slack notifier, `type: Slack` ([ADR 0017](docs/decisions/0017-webhook-notifier.md)). Email settings optional in the chart, for webhook-only installs. `helm install` prints a commented `CertReport` example. The inline logo has a file name (Gmail no longer shows "noname"). `golang.org/x/net` and OpenTelemetry bumped past `govulncheck` findings. Unused webhook server removed |
@@ -459,8 +460,8 @@ publishes the image `ghcr.io/sakshitposting-irl/cyclops:<tag>` and the chart
 | Welcome message ([ADR 0015](docs/decisions/0015-email-policy.md)) | Done and published (works from `v0.1.0-beta.6`; `beta.5` crash-loops on startup). Unit- and envtest-tested, and run on kind against a fake SMTP server: sent once per `CertReport`; a bad SMTP host gives `WelcomeSent=False` plus one Warning Event and no retry; editing the `CertReport` sends a new one; restarting the controller sends nothing. Own built-in template, overridable with the `welcome.html` key |
 | Diagnostics for non-ACME failures ([ADR 0021](docs/decisions/0021-issuer-diagnostics.md)) | Done and published (from `v0.1.0-beta.7`). Unit-tested and run on kind: a certificate whose CA Issuer has no CA Secret shows the request's reason and `Issuer <name>: ErrGetKeyPair: ...` in the email. External issuers (a group other than `cert-manager.io`) are not covered |
 | Signal when a report run fails | Done, run on kind: `ReportSucceeding` condition plus a Warning Event ([ADR 0019](docs/decisions/0019-failed-run-visibility.md)). It says that a run failed, not why; the Job's logs have the cause |
-| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`1.0.2`). It lints and renders, with and without email settings, and installing and upgrading have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
-| Published image | `v1.0.2`, for linux/amd64 and linux/arm64 |
+| Helm chart | Published as `oci://ghcr.io/sakshitposting-irl/charts/cyclops` (`1.0.3`). It lints and renders, with and without email settings, and installing and upgrading have been run on kind. Decided in [ADR 0016](docs/decisions/0016-packaging.md); whether the kustomize manifests stay a second install path is open |
+| Published image | `v1.0.3`, for linux/amd64 and linux/arm64 |
 | Release pipeline (`.github/workflows/release.yml`) | Done, first used for `v0.1.0-beta.2`: pushing a `v*` tag tests, then publishes the multi-arch image, the chart and a GitHub pre-release |
 | `CertReport` schema | Done ([ADR 0018](docs/decisions/0018-certreport-schema.md)) |
 | Ingress annotation mode (`spec.ingressAnnotationMode`) | Done, unit-tested and run on kind (shared secrets, dangling annotations, healthy-only) ([ADR 0020](docs/decisions/0020-ingress-annotation-mode.md)) |
@@ -512,7 +513,7 @@ make manifests generate
 ## Deploying your own build
 
 To run a build of your own instead of the published image (or to deploy the published image from
-the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v1.0.2` and
+the manifests instead of the chart, set `IMG=ghcr.io/sakshitposting-irl/cyclops:v1.0.3` and
 skip the build and push line):
 
 ```sh

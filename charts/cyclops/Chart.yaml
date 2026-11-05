@@ -2,13 +2,13 @@ apiVersion: v2
 name: cyclops
 description: Daily backstop report for cert-manager renewals that silently fail
 type: application
-version: 1.0.2
-appVersion: v1.0.2
+version: 1.0.3
+appVersion: v1.0.3
 home: https://github.com/sakshitposting-irl/cyclops
 sources:
   - https://github.com/sakshitposting-irl/cyclops
 kubeVersion: ">=1.25.0-0"
-icon: https://raw.githubusercontent.com/sakshitposting-irl/cyclops/main/docs/assets/logo.png
+icon: https://raw.githubusercontent.com/sakshitposting-irl/cyclops/main/docs/assets/icon.png
 keywords:
   - cert-manager
   - certificates
