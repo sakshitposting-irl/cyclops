@@ -1,0 +1,47 @@
+name: Test report (SES or Slack)
+description: You ran cyclops against real AWS SES or a real Slack workspace. Tell us what happened, good or bad.
+title: "Test report: "
+labels: ["test-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SES against real AWS and Slack's real message limits are the two parts of cyclops that have
+        only been tested against fakes (see the README's Status section). A report that it worked is
+        as useful as one that it broke. Please don't paste credentials, webhook URLs or Secret contents.
+  - type: dropdown
+    id: target
+    attributes:
+      label: What did you test?
+      options:
+        - SES
+        - Slack
+        - Both
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - It worked
+        - It worked, with surprises
+        - It failed
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you set up, what arrived (or didn't), and anything surprising. For failures, include `kubectl describe certreport <name>` and the report Job's logs.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: cyclops chart, Kubernetes, cert-manager.
+      placeholder: "cyclops 0.1.0, Kubernetes 1.31, cert-manager 1.21"
+    validations:
+      required: true
