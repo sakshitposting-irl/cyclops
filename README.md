@@ -4,6 +4,7 @@
 <p align="center">
   <a href="https://github.com/sakshitposting-irl/cyclops/releases"><img alt="release" src="https://img.shields.io/github/v/release/sakshitposting-irl/cyclops?include_prereleases"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
+  <a href="https://artifacthub.io/packages/search?repo=cyclop"><img alt="Artifact Hub" src="https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/cyclop"></a>
 </p>
 
 **cert-manager renews your certificates automatically, until it silently doesn't.** An ACME
