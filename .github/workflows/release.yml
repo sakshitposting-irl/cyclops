@@ -129,7 +129,8 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          helm push "dist/cyclops-${TAG#v}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" | tee push.log
+          # helm writes "Pushed:" and "Digest:" to stderr, hence 2>&1.
+          helm push "dist/cyclops-${TAG#v}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" 2>&1 | tee push.log
           digest=$(sed -n 's/^Digest: //p' push.log)
           if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::could not read the chart digest from helm push"
