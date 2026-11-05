@@ -2,9 +2,37 @@ apiVersion: v2
 name: cyclops
 description: Daily backstop report for cert-manager renewals that silently fail
 type: application
-version: 0.1.0-beta.8
-appVersion: v0.1.0-beta.8
+version: 0.1.0
+appVersion: v0.1.0
 home: https://github.com/sakshitposting-irl/cyclops
 sources:
   - https://github.com/sakshitposting-irl/cyclops
 kubeVersion: ">=1.25.0-0"
+icon: https://raw.githubusercontent.com/sakshitposting-irl/cyclops/main/docs/assets/logo.png
+keywords:
+  - cert-manager
+  - certificates
+  - tls
+  - monitoring
+  - alerting
+  - slack
+  - email
+maintainers:
+  - name: Saksham Srivastava
+    url: https://github.com/sakshitposting-irl
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/sakshitposting-irl/cyclops
+    - name: Design decisions
+      url: https://github.com/sakshitposting-irl/cyclops/tree/main/docs/decisions
+    - name: Report a problem
+      url: https://github.com/sakshitposting-irl/cyclops/issues
+  artifacthub.io/crds: |
+    - kind: CertReport
+      version: v1alpha1
+      name: certreports.cyclops.sakshitposting-irl.github.io
+      displayName: CertReport
+      description: When to look at cert-manager certificates, which namespaces to cover, and who to tell.
