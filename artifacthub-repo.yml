@@ -1,0 +1,4 @@
+# Artifact Hub repository metadata, used to verify the publisher.
+# It is not read from git: it is pushed once to the chart's OCI repository under the tag
+# `artifacthub.io` (see charts/cyclops/README.md, "Artifact Hub").
+repositoryID: 9336c36e-8bb3-4627-99f4-7c4f5511b6fe

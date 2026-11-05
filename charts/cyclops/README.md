@@ -192,3 +192,18 @@ rejects bad combinations at `helm install`/`upgrade`: SMTP without a host, SES w
 | `rbac.ingressAccess` | `true` | Let report Pods read Ingresses; needed only for `spec.ingressAnnotationMode` |
 | `metrics.enabled` / `.port` | `true` / `8443` | HTTPS metrics endpoint |
 | `controller.*` | | replicas, leader election, resources, scheduling |
+
+## Artifact Hub
+
+The chart is listed on Artifact Hub as repository `cyclop`. To be a verified publisher, Artifact Hub
+reads `artifacthub-repo.yml` (in the repository root) from the OCI repository itself, under the tag
+`artifacthub.io`. It is not read from git, and releases do not touch it. It was pushed once with
+[oras](https://oras.land):
+
+```bash
+oras push ghcr.io/sakshitposting-irl/charts/cyclops:artifacthub.io \
+  --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+  artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+```
+
+Artifact Hub checks it on its next scan of the repository, which can take a while.
