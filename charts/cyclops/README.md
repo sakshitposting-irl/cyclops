@@ -207,3 +207,14 @@ oras push ghcr.io/sakshitposting-irl/charts/cyclops:artifacthub.io \
 ```
 
 Artifact Hub checks it on its next scan of the repository, which can take a while.
+
+### Verifying the chart signature
+
+Each release signs the chart in GHCR with keyless [cosign](https://github.com/sigstore/cosign), which
+is what gives the package its Signed badge on Artifact Hub. To check one yourself:
+
+```bash
+cosign verify ghcr.io/sakshitposting-irl/charts/cyclops:<version> \
+  --certificate-identity-regexp '^https://github.com/sakshitposting-irl/cyclops/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
